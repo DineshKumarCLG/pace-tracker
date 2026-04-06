@@ -1,0 +1,435 @@
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════
+   PACE — Skeuomorphic Glass Design System
+   Golden amber palette · Deep 3D surfaces · Tactile interactions
+   ═══════════════════════════════════════════════════════════════ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/GeistVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMonoVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-session-card: 1.25rem;
+  --radius-kpi-card: 1rem;
+  --radius-idle-modal: 1.5rem;
+
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-session-active: hsl(var(--session-active));
+  --color-session-active-foreground: hsl(var(--session-active-foreground));
+  --color-session-break: hsl(var(--session-break));
+  --color-session-break-foreground: hsl(var(--session-break-foreground));
+  --color-session-ended: hsl(var(--session-ended));
+  --color-session-ended-foreground: hsl(var(--session-ended-foreground));
+  --color-session-away: hsl(var(--session-away));
+  --color-session-away-foreground: hsl(var(--session-away-foreground));
+}
+
+/* ── Dark (default) ── */
+:root {
+  color-scheme: dark;
+  --background: 225 15% 7%;
+  --foreground: 40 10% 92%;
+  --card: 225 14% 10%;
+  --card-foreground: 40 10% 92%;
+  --popover: 225 14% 10%;
+  --popover-foreground: 40 10% 92%;
+  --primary: 40 95% 52%;
+  --primary-foreground: 30 20% 8%;
+  --secondary: 225 10% 15%;
+  --secondary-foreground: 40 8% 80%;
+  --muted: 225 10% 14%;
+  --muted-foreground: 225 8% 48%;
+  --accent: 225 10% 16%;
+  --accent-foreground: 40 8% 88%;
+  --destructive: 0 70% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 225 8% 16%;
+  --input: 225 8% 16%;
+  --ring: 40 95% 52%;
+  --sidebar: 225 15% 8%;
+  --sidebar-foreground: 40 8% 78%;
+  --sidebar-accent: 225 10% 13%;
+  --sidebar-accent-foreground: 40 8% 88%;
+  --sidebar-border: 225 8% 14%;
+  --session-active: 40 95% 52%;
+  --session-active-foreground: 30 20% 8%;
+  --session-break: 22 95% 52%;
+  --session-break-foreground: 22 90% 8%;
+  --session-ended: 225 6% 38%;
+  --session-ended-foreground: 225 6% 82%;
+  --session-away: 225 6% 28%;
+  --session-away-foreground: 225 6% 65%;
+  --glass-bg: 225 14% 10% / 0.6;
+  --glass-border: 225 8% 24% / 0.55;
+  --glass-blur: 22px;
+}
+
+/* ── Light ── */
+.light {
+  color-scheme: light;
+  --background: 42 25% 97%;
+  --foreground: 225 20% 12%;
+  --card: 42 20% 99%;
+  --card-foreground: 225 20% 12%;
+  --popover: 42 20% 99%;
+  --popover-foreground: 225 20% 12%;
+  --primary: 36 95% 46%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 42 18% 93%;
+  --secondary-foreground: 225 12% 22%;
+  --muted: 42 15% 93%;
+  --muted-foreground: 225 10% 38%;
+  --accent: 42 18% 94%;
+  --accent-foreground: 225 12% 15%;
+  --destructive: 0 78% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 42 14% 85%;
+  --input: 42 14% 85%;
+  --ring: 36 95% 46%;
+  --sidebar: 42 22% 96%;
+  --sidebar-foreground: 225 12% 18%;
+  --sidebar-accent: 42 16% 92%;
+  --sidebar-accent-foreground: 225 12% 15%;
+  --sidebar-border: 42 14% 88%;
+  --session-active: 36 95% 46%;
+  --session-active-foreground: 0 0% 100%;
+  --session-break: 22 92% 46%;
+  --session-break-foreground: 22 90% 8%;
+  --session-ended: 225 8% 55%;
+  --session-ended-foreground: 0 0% 100%;
+  --session-away: 225 8% 65%;
+  --session-away-foreground: 225 12% 15%;
+  --glass-bg: 42 20% 99% / 0.75;
+  --glass-border: 42 14% 82% / 0.65;
+  --glass-blur: 24px;
+}
+
+/* ── Base ── */
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overflow: hidden;
+    letter-spacing: -0.01em;
+  }
+  h1, h2, h3 { letter-spacing: -0.025em; }
+  [data-tauri-drag-region] { -webkit-user-select: none; user-select: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   3D Skeuomorphic Surfaces
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Raised glass panel — the workhorse surface */
+.glass {
+  background: hsl(var(--glass-bg));
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  border: 1px solid hsl(var(--glass-border));
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.06) inset,
+    0 1px 0 rgba(255,255,255,0.05) inset,
+    0 1px 3px rgba(0,0,0,0.15),
+    0 4px 14px rgba(0,0,0,0.1),
+    0 8px 24px rgba(0,0,0,0.06);
+}
+
+/* Elevated glass — modals, dropdowns */
+.glass-elevated {
+  background: hsl(var(--glass-bg));
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  border: 1px solid hsl(var(--glass-border));
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.06) inset,
+    0 1px 0 rgba(255,255,255,0.05) inset,
+    0 2px 4px rgba(0,0,0,0.1),
+    0 8px 24px rgba(0,0,0,0.18),
+    0 20px 48px rgba(0,0,0,0.12);
+}
+
+/* Inset well — recessed surfaces like timeline tracks, input fields */
+.inset-well {
+  background: linear-gradient(180deg, hsl(225 15% 6%) 0%, hsl(225 14% 8%) 100%);
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.35) inset,
+    0 0 0 0.5px rgba(0,0,0,0.3) inset,
+    0 -1px 0 rgba(255,255,255,0.03) inset;
+  border: none;
+}
+.light .inset-well {
+  background: linear-gradient(180deg, hsl(40 15% 92%) 0%, hsl(40 12% 94%) 100%);
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.06) inset,
+    0 0 0 0.5px rgba(0,0,0,0.04) inset,
+    0 -1px 0 rgba(255,255,255,0.7) inset;
+}
+
+.light .glass {
+  background: hsl(var(--glass-bg));
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  border: 1px solid hsl(var(--glass-border));
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.7) inset,
+    0 1px 0 rgba(255,255,255,0.5) inset,
+    0 1px 3px rgba(0,0,0,0.04),
+    0 4px 14px rgba(0,0,0,0.03),
+    0 8px 24px rgba(180,160,120,0.04);
+}
+
+.light .glass-elevated {
+  background: hsl(var(--glass-bg));
+  backdrop-filter: blur(28px) saturate(1.8);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  border: 1px solid hsl(var(--glass-border));
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.8) inset,
+    0 1px 0 rgba(255,255,255,0.6) inset,
+    0 2px 4px rgba(0,0,0,0.03),
+    0 8px 24px rgba(0,0,0,0.06),
+    0 20px 48px rgba(180,160,120,0.06);
+}
+
+.light .btn-3d {
+  background: linear-gradient(180deg, hsl(38 95% 54%) 0%, hsl(34 92% 42%) 100%);
+  color: hsl(0 0% 100%);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.3) inset,
+    0 1px 0 rgba(255,255,255,0.35) inset,
+    0 -1px 0 rgba(0,0,0,0.1) inset,
+    0 2px 8px rgba(180,130,20,0.25),
+    0 4px 16px rgba(180,130,20,0.12);
+}
+
+.light .btn-3d:hover {
+  transform: translateY(-0.5px);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.35) inset,
+    0 1px 0 rgba(255,255,255,0.4) inset,
+    0 -1px 0 rgba(0,0,0,0.1) inset,
+    0 3px 10px rgba(180,130,20,0.35),
+    0 6px 20px rgba(180,130,20,0.18),
+    0 0 20px rgba(200,160,40,0.1);
+}
+
+.light .btn-3d:active {
+  transform: translateY(0.5px);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.1) inset,
+    0 0 0 0.5px rgba(0,0,0,0.05) inset,
+    0 1px 3px rgba(180,130,20,0.1);
+}
+
+.light .btn-ghost {
+  background: linear-gradient(180deg, hsl(42 18% 96%) 0%, hsl(42 15% 93%) 100%);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.6) inset,
+    0 1px 0 rgba(255,255,255,0.4) inset,
+    0 1px 3px rgba(0,0,0,0.04);
+}
+
+/* Raised pill button — tactile 3D */
+.btn-3d {
+  background: linear-gradient(180deg, hsl(40 95% 56%) 0%, hsl(38 92% 44%) 100%);
+  color: hsl(30 20% 8%);
+  border: none;
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.2) inset,
+    0 1px 0 rgba(255,255,255,0.25) inset,
+    0 -1px 0 rgba(0,0,0,0.15) inset,
+    0 2px 6px rgba(200,150,30,0.3),
+    0 4px 12px rgba(200,150,30,0.15);
+  transition: all 0.15s ease;
+}
+.btn-3d:hover {
+  transform: translateY(-0.5px);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.25) inset,
+    0 1px 0 rgba(255,255,255,0.3) inset,
+    0 -1px 0 rgba(0,0,0,0.15) inset,
+    0 3px 8px rgba(200,150,30,0.4),
+    0 6px 18px rgba(200,150,30,0.2);
+}
+.btn-3d:active {
+  transform: translateY(0.5px);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.25) inset,
+    0 0 0 0.5px rgba(0,0,0,0.1) inset,
+    0 1px 3px rgba(200,150,30,0.15);
+}
+
+/* Ghost button — subtle raised surface */
+.btn-ghost {
+  background: linear-gradient(180deg, hsl(var(--accent)) 0%, hsl(var(--muted)) 100%);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.04) inset,
+    0 1px 0 rgba(255,255,255,0.03) inset,
+    0 1px 2px rgba(0,0,0,0.1);
+  transition: all 0.15s ease;
+}
+.btn-ghost:hover {
+  transform: translateY(-0.5px);
+  box-shadow:
+    0 0 0 0.5px rgba(255,255,255,0.06) inset,
+    0 1px 0 rgba(255,255,255,0.05) inset,
+    0 2px 6px rgba(0,0,0,0.15);
+}
+.btn-ghost:active {
+  transform: translateY(0.5px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2) inset;
+}
+
+/* ── Animations ── */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.03); }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+@keyframes slide-up-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-glow-pulse { animation: glow-pulse 4s ease-in-out infinite; }
+.animate-float { animation: float 5s ease-in-out infinite; }
+.animate-breathe { animation: breathe 3s ease-in-out infinite; }
+.animate-slide-up { animation: slide-up-fade 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-scale-in { animation: scale-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* ── Noise texture ── */
+.noise::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.3); }
+
+/* ═══════════════════════════════════════════════════════════════
+   HeroUI v3 Aligned — GPU-accelerated transitions
+   Semantic data attributes for state-driven styling
+   ═══════════════════════════════════════════════════════════════ */
+
+/* GPU-accelerated hover lift — use on interactive cards */
+.hover-lift {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  will-change: transform;
+}
+.hover-lift:hover { transform: translateY(-1px); }
+.hover-lift:active { transform: translateY(0.5px); }
+
+/* Semantic data-attribute states (HeroUI pattern) */
+[data-pressed="true"] { transform: scale(0.97); }
+[data-hovered="true"] { background-color: hsl(var(--accent)); }
+[data-focused="true"] { box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3); }
+[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
+
+/* Consistent focus-visible ring */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring));
+}
+
+/* Responsive container utility */
+.container-responsive {
+  width: 100%;
+  max-width: 100%;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+@media (min-width: 640px) {
+  .container-responsive { padding-left: 1.25rem; padding-right: 1.25rem; }
+}
+@media (min-width: 768px) {
+  .container-responsive { max-width: 640px; margin-left: auto; margin-right: auto; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Premium Utility Classes
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Gradient accent line */
+.accent-line {
+  height: 2px;
+  background: linear-gradient(90deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.1) 100%);
+  border-radius: 1px;
+}
+
+/* Subtle glow on hover */
+.glow-hover {
+  transition: box-shadow 0.3s ease;
+}
+.glow-hover:hover {
+  box-shadow: 0 0 20px rgba(200, 160, 40, 0.06);
+}
+.light .glow-hover:hover {
+  box-shadow: 0 0 24px rgba(180, 130, 20, 0.08);
+}
+
+/* Section divider with gradient */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, hsl(var(--border)) 20%, hsl(var(--border)) 80%, transparent 100%);
+}

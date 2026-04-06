@@ -1,0 +1,23 @@
+{$DOMAIN} {
+	# Auto-HTTPS via Let's Encrypt (automatic with Caddy)
+
+	# PocketBase API and admin UI
+	handle /api/* {
+		reverse_proxy pocketbase:8090
+	}
+
+	handle /_/* {
+		reverse_proxy pocketbase:8090
+	}
+
+	# LiteLLM proxy
+	handle /llm/* {
+		uri strip_prefix /llm
+		reverse_proxy litellm:4000
+	}
+
+	# Fallback — return 404 for unmatched routes
+	handle {
+		respond "Not Found" 404
+	}
+}

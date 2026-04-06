@@ -1,0 +1,167 @@
+import {
+  createRouter,
+  createRootRoute,
+  createRoute,
+  Outlet,
+} from "@tanstack/react-router";
+import Sidebar from "@/components/Sidebar";
+import AuthGuard from "@/components/AuthGuard";
+import TodayScreen from "@/screens/Today";
+import TeamScreen from "@/screens/Team";
+import TasksScreen from "@/screens/Tasks";
+import ReviewScreen from "@/screens/Review";
+import SettingsScreen from "@/screens/Settings";
+import LeaveScreen from "@/screens/Leave";
+import RequestsScreen from "@/screens/Requests";
+import AttendanceScreen from "@/screens/Attendance";
+import DashboardScreen from "@/screens/Dashboard";
+import AnalyticsScreen from "@/screens/Analytics";
+import DigestScreen from "@/screens/Digest";
+import MonthlyScreen from "@/screens/Monthly";
+import OnboardingScreen from "@/screens/Onboarding";
+import AuthScreen from "@/screens/Auth";
+
+/* ── Root route ── */
+const rootRoute = createRootRoute({
+  component: () => <Outlet />,
+});
+
+/* ── Layout with responsive sidebar, wrapped in auth guard ── */
+const appLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "app-layout",
+  component: () => (
+    <AuthGuard>
+      <div className="relative flex h-screen overflow-hidden bg-background text-foreground">
+        {/* Subtle ambient gradient for glass depth */}
+        <div className="pointer-events-none fixed inset-0 z-0">
+          <div className="absolute top-0 right-0 h-[500px] w-[500px] rounded-full bg-primary/[0.03] blur-[120px]" />
+          <div className="absolute bottom-0 left-1/4 h-[400px] w-[400px] rounded-full bg-indigo-500/[0.02] blur-[100px]" />
+        </div>
+        {/* Sidebar — hidden on small screens, visible on md+ */}
+        <div className="hidden md:flex relative z-10">
+          <Sidebar />
+        </div>
+        <main className="relative z-10 flex-1 overflow-hidden">
+          <Outlet />
+        </main>
+      </div>
+    </AuthGuard>
+  ),
+});
+
+/* ── App routes (sidebar visible) ── */
+const todayRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/",
+  component: TodayScreen,
+});
+
+const teamRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/team",
+  component: TeamScreen,
+});
+
+const tasksRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/tasks",
+  component: TasksScreen,
+});
+
+const reviewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/review",
+  component: ReviewScreen,
+});
+
+const settingsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/settings",
+  component: SettingsScreen,
+});
+
+const leaveRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/leave",
+  component: LeaveScreen,
+});
+
+const requestsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/requests",
+  component: RequestsScreen,
+});
+
+const attendanceRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/attendance",
+  component: AttendanceScreen,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/dashboard",
+  component: DashboardScreen,
+});
+
+const analyticsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/analytics",
+  component: AnalyticsScreen,
+});
+
+const digestRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/digest",
+  component: DigestScreen,
+});
+
+const monthlyRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/monthly",
+  component: MonthlyScreen,
+});
+
+/* ── Auth (no sidebar — direct child of root) ── */
+const authRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auth",
+  component: AuthScreen,
+});
+
+/* ── Onboarding (no sidebar — direct child of root) ── */
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/onboarding",
+  component: OnboardingScreen,
+});
+
+/* ── Route tree & router ── */
+const routeTree = rootRoute.addChildren([
+  appLayoutRoute.addChildren([
+    todayRoute,
+    teamRoute,
+    tasksRoute,
+    reviewRoute,
+    settingsRoute,
+    leaveRoute,
+    requestsRoute,
+    attendanceRoute,
+    dashboardRoute,
+    analyticsRoute,
+    digestRoute,
+    monthlyRoute,
+  ]),
+  authRoute,
+  onboardingRoute,
+]);
+
+export const router = createRouter({ routeTree });
+
+/* ── Type registration for TanStack Router ── */
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}

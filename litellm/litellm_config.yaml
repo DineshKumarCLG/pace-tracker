@@ -1,0 +1,60 @@
+# LiteLLM Proxy Configuration for PACE
+# Provider-agnostic AI routing — API keys resolved server-side only.
+# Deploy on AWS Lightsail alongside PocketBase.
+# Last updated: April 2026
+
+model_list:
+  # Gemini 2.0 Flash is deprecated/restricted for new customers (Mar 2026).
+  # gemini-2.5-flash is now the stable, recommended production model.
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # claude-sonnet-4-20250514 → claude-sonnet-4-6 (released Feb 2026)
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # gpt-4o is still functional but gpt-4.1 is the current mid-tier successor.
+  # Swap to openai/gpt-5.4 if you want the current flagship instead.
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Qwen Turbo → Qwen 3 generation on OpenRouter (Qwen 3.6 Plus is #5 by traffic Apr 2026).
+  # Verify exact slug against https://openrouter.ai/models — OpenRouter slugs can shift fast.
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openrouter/qwen/qwen3.6-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Bedrock model ID updated to Claude Sonnet 4.6 (snapshot: 20260218).
+  - model_name: bedrock-claude
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-6-20260218-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION
+
+  # openrouter/auto is still valid — no change needed.
+  - model_name: openrouter-auto
+    litellm_params:
+      model: openrouter/auto
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # llama3 is heavily outdated. Llama 4 is the current generation (2026).
+  - model_name: ollama-local
+    litellm_params:
+      model: ollama/llama4
+      api_base: os.environ/OLLAMA_BASE_URL
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  drop_params: true
+
+litellm_settings:
+  request_timeout: 30
+  num_retries: 2

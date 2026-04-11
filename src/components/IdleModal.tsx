@@ -1,12 +1,12 @@
 import { useEffect } from "react";
-import { UtensilsCrossed, Coffee, Users, X } from "lucide-react";
+import { UtensilsCrossed, Coffee, X } from "lucide-react";
 import { useSessionStore } from "@/stores/sessionStore";
 import type { IdleInfo } from "@/stores/sessionStore";
 import { isTauri } from "@/lib/tauri";
 import { nowUtc } from "@/lib/timestamp";
 import { cn } from "@/lib/utils";
 
-type IdleResolution = "lunch" | "short" | "meeting" | "discarded";
+type IdleResolution = "lunch" | "short" | "discarded";
 
 interface UserReturnedPayload {
   away_duration_secs: number;
@@ -20,7 +20,6 @@ const resolutionOptions: {
 }[] = [
   { type: "lunch", label: "Lunch break", icon: <UtensilsCrossed className="h-4 w-4" /> },
   { type: "short", label: "Short break", icon: <Coffee className="h-4 w-4" /> },
-  { type: "meeting", label: "Meeting", icon: <Users className="h-4 w-4" /> },
   { type: "discarded", label: "Discard", icon: <X className="h-4 w-4" /> },
 ];
 

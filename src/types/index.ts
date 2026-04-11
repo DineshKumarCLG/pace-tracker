@@ -295,16 +295,6 @@ export interface MilestoneTask {
   taskId: string;
 }
 
-/** Meeting record — logged when idle time is classified as a meeting */
-export interface Meeting {
-  id: string;
-  breakId: string;               // FK → breaks
-  sessionId: string;             // FK → sessions
-  title: string;
-  attendees: string | null;      // comma-separated names or null
-  createdAt: number;
-}
-
 /** End-of-day report generated on session close */
 export interface DailyReport {
   id: string;
@@ -314,48 +304,13 @@ export interface DailyReport {
   totalMinutes: number;
   tasksWorked: Array<{ taskId: string; title: string; minutes: number }>;
   breaks: Array<{ type: string; minutes: number }>;
-  meetings: Array<{ title: string; minutes: number }>;
   outputNote: string | null;
   gitCommits: Array<{ hash: string; message: string }>;
   createdAt: number;
 }
 
 
-/** Morning digest summarizing previous workday activity and today's availability */
-export interface MorningDigest {
-  id: string;
-  date: string;
-  memberSummaries: Array<{
-    userId: string;
-    name: string;
-    totalHours: number;
-    tasksCompleted: string[];
-    outputNote: string | null;
-  }>;
-  onLeaveToday: string[];
-  onWfhToday: string[];
-  createdAt: number;
-}
 
-
-/** Async standup response — one per user per workday (Req 18.1, 18.2) */
-export interface StandupResponse {
-  id: string;
-  userId: string;
-  date: string;                  // YYYY-MM-DD (local date)
-  response: string;
-  createdAt: number;             // UTC timestamp
-}
-
-/** Mood/energy check-in — local-only, never synced (Req 19.1, 19.2, 19.3) */
-export interface MoodCheck {
-  id: string;
-  userId: string;
-  sessionId: string;
-  energy: number;                // 1-5 scale
-  moodTag: string | null;        // optional one-word tag
-  createdAt: number;             // UTC timestamp
-}
 
 
 /** Workspace access proof — mandatory check-in/check-out record */

@@ -21,7 +21,7 @@ import { useUiStore } from "@/stores/uiStore";
  * 2. When a leave request is created, it's written to local storage first
  *    (before any network call)
  * 3. The sync queue includes leave_requests records
- * 4. Private collections (mood_checks, focus_score_history) are NOT in
+ * 4. Private collections (focus_score_history) are NOT in
  *    SYNCED_COLLECTIONS
  *
  * **Validates: Requirements 24.2**

@@ -102,25 +102,6 @@ Rules:
 - If no match found for project/assignee, use null`;
 }
 
-function buildStandupPrompt(
-  sessions: Session[],
-  tasksTouched: string[],
-  outputNotes: string[],
-): string {
-  return `Generate a brief standup update from yesterday's work data.
-
-Sessions: ${sessions.length} completed
-Tasks touched: ${tasksTouched.join(", ") || "none"}
-Output notes: ${outputNotes.join(" | ") || "none"}
-
-Format:
-- Yesterday: [what was done]
-- Today: [suggested focus based on yesterday's work]
-- Blockers: [any apparent blockers, or "none"]
-
-Keep it under 100 words. Tone: direct, factual.`;
-}
-
 function buildEstimatePrompt(
   taskTitle: string,
   historicalTasks: Array<{ title: string; totalMinutes: number }>,
@@ -234,23 +215,6 @@ describe("AI Request Construction", () => {
       expect(prompt).toContain('"priority"');
       expect(prompt).toContain('"dueDate"');
       expect(prompt).toContain("Return ONLY valid JSON");
-    });
-  });
-
-  describe("Standup prompt", () => {
-    it("includes yesterday's sessions, tasks touched, and output note", () => {
-      const sessions: Session[] = [
-        { id: "s1", userId: "u1", startTime: 1700000000, endTime: 1700030000, outputNote: "Deployed v2" },
-      ];
-      const tasksTouched = ["Feature X", "Bug fix Y"];
-      const outputNotes = ["Deployed v2"];
-
-      const prompt = buildStandupPrompt(sessions, tasksTouched, outputNotes);
-
-      expect(prompt).toContain("1 completed");
-      expect(prompt).toContain("Feature X");
-      expect(prompt).toContain("Bug fix Y");
-      expect(prompt).toContain("Deployed v2");
     });
   });
 

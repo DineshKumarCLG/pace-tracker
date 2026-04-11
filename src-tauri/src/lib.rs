@@ -75,6 +75,15 @@ pub fn run() {
             commands::list_projects,
             commands::collect_git_events,
             commands::get_git_events,
+            commands::create_review_cycle,
+            commands::close_review_cycle,
+            commands::resolve_tie,
+            commands::get_review_history,
+            commands::get_warning_count,
+            commands::submit_founder_review,
+            commands::apply_dilution,
+            commands::get_dilution_events_for_cycle,
+            commands::compute_startup_health,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PACE");

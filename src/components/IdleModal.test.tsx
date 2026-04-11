@@ -65,13 +65,12 @@ describe("IdleModal", () => {
     expect(screen.getByRole("dialog")).toBeDefined();
   });
 
-  it("displays all four resolution buttons", () => {
+  it("displays all three resolution buttons", () => {
     setStoreForIdleModal(sampleIdleInfo);
     render(<IdleModal />);
 
     expect(screen.getByText("Lunch break")).toBeDefined();
     expect(screen.getByText("Short break")).toBeDefined();
-    expect(screen.getByText("Meeting")).toBeDefined();
     expect(screen.getByText("Discard")).toBeDefined();
   });
 

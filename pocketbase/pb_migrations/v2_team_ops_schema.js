@@ -5,7 +5,7 @@
  *
  * Adds synced collections for PACE v2 team operations.
  * Collections: leave_requests, public_holidays, milestones, milestone_tasks,
- * standup_responses, meetings, daily_reports, morning_digests
+ * daily_reports
  *
  * Excluded (private, local-only): mood_checks, focus_score_history
  * Already exist in initial_schema.js: teams, team_members
@@ -74,31 +74,6 @@ migrate(
     });
     app.save(milestoneTasks);
 
-    // --- standup_responses ---
-    const standupResponses = new Collection({
-      name: "standup_responses",
-      type: "base",
-      fields: [
-        { name: "userId", type: "relation", required: true, options: { collectionId: "_pb_users_auth_", maxSelect: 1 } },
-        { name: "date", type: "text", required: true },
-        { name: "response", type: "text", required: true },
-      ],
-    });
-    app.save(standupResponses);
-
-    // --- meetings ---
-    const meetings = new Collection({
-      name: "meetings",
-      type: "base",
-      fields: [
-        { name: "breakId", type: "relation", required: true, options: { collectionId: breaks.id, maxSelect: 1 } },
-        { name: "sessionId", type: "relation", required: true, options: { collectionId: sessions.id, maxSelect: 1 } },
-        { name: "title", type: "text", required: true },
-        { name: "attendees", type: "text" },
-      ],
-    });
-    app.save(meetings);
-
     // --- daily_reports ---
     const dailyReports = new Collection({
       name: "daily_reports",
@@ -111,18 +86,6 @@ migrate(
       ],
     });
     app.save(dailyReports);
-
-    // --- morning_digests ---
-    const morningDigests = new Collection({
-      name: "morning_digests",
-      type: "base",
-      fields: [
-        { name: "date", type: "text", required: true },
-        { name: "digestJson", type: "text", required: true },
-        { name: "viewedBy", type: "json" },
-      ],
-    });
-    app.save(morningDigests);
 
     // --- workspace_proofs ---
     const workspaceProofs = new Collection({
@@ -182,10 +145,7 @@ migrate(
       "office_zones",
       "workspace_locations",
       "workspace_proofs",
-      "morning_digests",
       "daily_reports",
-      "meetings",
-      "standup_responses",
       "milestone_tasks",
       "milestones",
       "public_holidays",

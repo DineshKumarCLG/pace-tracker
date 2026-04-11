@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateEndOfDayReport } from "@/lib/reports";
-import type { Session, SessionTask, Break, Meeting, GitEvent, Task } from "@/types";
+import type { Session, SessionTask, Break, GitEvent, Task } from "@/types";
 
 // Helper: UTC timestamp for a given date and time
 function utc(
@@ -45,16 +45,6 @@ function makeBreak(
     endTime: null,
     type: "short",
     autoDetected: false,
-    ...overrides,
-  };
-}
-
-function makeMeeting(
-  overrides: Partial<Meeting> & Pick<Meeting, "id" | "breakId" | "sessionId" | "title">,
-): Meeting {
-  return {
-    attendees: null,
-    createdAt: utc(2025, 3, 15),
     ...overrides,
   };
 }
@@ -115,7 +105,6 @@ describe("generateEndOfDayReport", () => {
       [],
       breaks,
       [],
-      [],
       {},
     );
 
@@ -150,7 +139,6 @@ describe("generateEndOfDayReport", () => {
       "report-1",
       session,
       sessionTasks,
-      [],
       [],
       [],
       tasksById,
@@ -193,7 +181,6 @@ describe("generateEndOfDayReport", () => {
       [],
       breaks,
       [],
-      [],
       {},
     );
 
@@ -202,45 +189,10 @@ describe("generateEndOfDayReport", () => {
     expect(report.breaks[1]).toEqual({ type: "lunch", minutes: 60 });
   });
 
-  it("includes meetings with title and duration (Req 20.4)", () => {
-    const breaks: Break[] = [
-      makeBreak({
-        id: "b1",
-        sessionId: "session-1",
-        startTime: utc(2025, 3, 15, 14, 0),
-        endTime: utc(2025, 3, 15, 14, 45),
-        type: "meeting",
-      }),
-    ];
-
-    const meetings: Meeting[] = [
-      makeMeeting({
-        id: "m1",
-        breakId: "b1",
-        sessionId: "session-1",
-        title: "Sprint planning",
-      }),
-    ];
-
-    const report = generateEndOfDayReport(
-      "report-1",
-      session,
-      [],
-      breaks,
-      meetings,
-      [],
-      {},
-    );
-
-    expect(report.meetings).toHaveLength(1);
-    expect(report.meetings[0]).toEqual({ title: "Sprint planning", minutes: 45 });
-  });
-
   it("includes output note from session (Req 11.1)", () => {
     const report = generateEndOfDayReport(
       "report-1",
       session,
-      [],
       [],
       [],
       [],
@@ -273,7 +225,6 @@ describe("generateEndOfDayReport", () => {
       session,
       [],
       [],
-      [],
       gitEvents,
       {},
     );
@@ -296,7 +247,6 @@ describe("generateEndOfDayReport", () => {
       [],
       [],
       [],
-      [],
       {},
     );
 
@@ -311,7 +261,6 @@ describe("generateEndOfDayReport", () => {
     const report = generateEndOfDayReport(
       "report-1",
       session,
-      [],
       [],
       [],
       [],
@@ -345,7 +294,6 @@ describe("generateEndOfDayReport", () => {
       sessionTasks,
       [],
       [],
-      [],
       tasksById,
     );
 
@@ -370,7 +318,6 @@ describe("generateEndOfDayReport", () => {
       [],
       breaks,
       [],
-      [],
       {},
     );
 
@@ -391,7 +338,6 @@ describe("generateEndOfDayReport", () => {
     const report = generateEndOfDayReport(
       "report-1",
       noNoteSession,
-      [],
       [],
       [],
       [],
@@ -416,7 +362,6 @@ describe("generateEndOfDayReport", () => {
       session,
       [],
       [],
-      [],
       gitEvents,
       {},
     );
@@ -439,7 +384,6 @@ describe("generateEndOfDayReport", () => {
       "report-1",
       session,
       sessionTasks,
-      [],
       [],
       [],
       {}, // no tasks
@@ -474,83 +418,10 @@ describe("generateEndOfDayReport", () => {
       [],
       breaks,
       [],
-      [],
       {},
     );
 
     expect(report.totalMinutes).toBeGreaterThanOrEqual(0);
-  });
-
-  it("computes meeting duration from linked break", () => {
-    const breaks: Break[] = [
-      makeBreak({
-        id: "b1",
-        sessionId: "session-1",
-        startTime: utc(2025, 3, 15, 14, 0),
-        endTime: utc(2025, 3, 15, 15, 0),
-        type: "meeting",
-      }),
-      makeBreak({
-        id: "b2",
-        sessionId: "session-1",
-        startTime: utc(2025, 3, 15, 16, 0),
-        endTime: utc(2025, 3, 15, 16, 30),
-        type: "meeting",
-      }),
-    ];
-
-    const meetings: Meeting[] = [
-      makeMeeting({
-        id: "m1",
-        breakId: "b1",
-        sessionId: "session-1",
-        title: "Standup",
-      }),
-      makeMeeting({
-        id: "m2",
-        breakId: "b2",
-        sessionId: "session-1",
-        title: "Design review",
-      }),
-    ];
-
-    const report = generateEndOfDayReport(
-      "report-1",
-      session,
-      [],
-      breaks,
-      meetings,
-      [],
-      {},
-    );
-
-    expect(report.meetings).toHaveLength(2);
-    expect(report.meetings[0]).toEqual({ title: "Standup", minutes: 60 });
-    expect(report.meetings[1]).toEqual({ title: "Design review", minutes: 30 });
-  });
-
-  it("handles meeting with no linked break (0 minutes)", () => {
-    const meetings: Meeting[] = [
-      makeMeeting({
-        id: "m1",
-        breakId: "nonexistent-break",
-        sessionId: "session-1",
-        title: "Orphan meeting",
-      }),
-    ];
-
-    const report = generateEndOfDayReport(
-      "report-1",
-      session,
-      [],
-      [],
-      meetings,
-      [],
-      {},
-    );
-
-    expect(report.meetings).toHaveLength(1);
-    expect(report.meetings[0]).toEqual({ title: "Orphan meeting", minutes: 0 });
   });
 
   it("full report with all data populated", () => {
@@ -572,22 +443,6 @@ describe("generateEndOfDayReport", () => {
         endTime: utc(2025, 3, 15, 12, 30),
         type: "lunch",
       }),
-      makeBreak({
-        id: "b2",
-        sessionId: "session-1",
-        startTime: utc(2025, 3, 15, 14, 0),
-        endTime: utc(2025, 3, 15, 14, 30),
-        type: "meeting",
-      }),
-    ];
-
-    const meetings: Meeting[] = [
-      makeMeeting({
-        id: "m1",
-        breakId: "b2",
-        sessionId: "session-1",
-        title: "Sprint planning",
-      }),
     ];
 
     const gitEvents: GitEvent[] = [
@@ -608,7 +463,6 @@ describe("generateEndOfDayReport", () => {
       session,
       sessionTasks,
       breaks,
-      meetings,
       gitEvents,
       tasksById,
     );
@@ -617,330 +471,14 @@ describe("generateEndOfDayReport", () => {
     expect(report.userId).toBe("user-1");
     expect(report.sessionId).toBe("session-1");
     expect(report.date).toBe("2025-03-15");
-    // 8h - 30min lunch - 30min meeting = 420 min
-    expect(report.totalMinutes).toBe(420);
+    // 8h - 30min lunch = 450 min
+    expect(report.totalMinutes).toBe(450);
     expect(report.tasksWorked).toHaveLength(1);
     expect(report.tasksWorked[0].title).toBe("Build reports");
-    expect(report.breaks).toHaveLength(2);
-    expect(report.meetings).toHaveLength(1);
-    expect(report.meetings[0].title).toBe("Sprint planning");
+    expect(report.breaks).toHaveLength(1);
     expect(report.outputNote).toBe("Shipped the new dashboard");
     expect(report.gitCommits).toHaveLength(1);
     expect(report.gitCommits[0].hash).toBe("abc123");
   });
 });
 
-
-import { generateMorningDigest } from "@/lib/reports";
-import type { AttendanceRecord, LeaveRequest, User } from "@/types";
-
-function makeUser(overrides: Partial<User> & Pick<User, "id" | "name">): User {
-  return {
-    role: null,
-    email: `${overrides.id}@test.com`,
-    avatarColor: "#000",
-    createdAt: utc(2025, 1, 1),
-    ...overrides,
-  };
-}
-
-function makeAttendanceRecord(
-  overrides: Partial<AttendanceRecord> & Pick<AttendanceRecord, "userId" | "date">,
-): AttendanceRecord {
-  return {
-    loginTime: null,
-    logoutTime: null,
-    totalHours: 0,
-    breakMinutes: 0,
-    outputNote: null,
-    ...overrides,
-  };
-}
-
-function makeLeaveRequest(
-  overrides: Partial<LeaveRequest> & Pick<LeaveRequest, "id" | "requesterId" | "type" | "startDate" | "endDate">,
-): LeaveRequest {
-  return {
-    reason: "",
-    status: "approved",
-    reviewerId: null,
-    reviewReason: null,
-    createdAt: utc(2025, 1, 1),
-    updatedAt: utc(2025, 1, 1),
-    ...overrides,
-  };
-}
-
-describe("generateMorningDigest", () => {
-  const members: User[] = [
-    makeUser({ id: "user-1", name: "Alice" }),
-    makeUser({ id: "user-2", name: "Bob" }),
-    makeUser({ id: "user-3", name: "Charlie" }),
-  ];
-
-  const today = "2025-03-18"; // Tuesday
-  const previousWorkday = "2025-03-17"; // Monday
-
-  it("includes per-member hours, tasks, and output notes from previous workday (Req 12.2)", () => {
-    const attendance: AttendanceRecord[] = [
-      makeAttendanceRecord({
-        userId: "user-1",
-        date: "2025-03-17",
-        totalHours: 7.5,
-        outputNote: "Finished auth module",
-      }),
-      makeAttendanceRecord({
-        userId: "user-2",
-        date: "2025-03-17",
-        totalHours: 6.0,
-        outputNote: null,
-      }),
-    ];
-
-    const completedTasks: Task[] = [
-      makeTask({ id: "t1", title: "Fix login bug", assigneeId: "user-1", status: "done" }),
-      makeTask({ id: "t2", title: "Add tests", assigneeId: "user-1", status: "done" }),
-      makeTask({ id: "t3", title: "Update docs", assigneeId: "user-2", status: "done" }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      attendance,
-      completedTasks,
-      [],
-      members,
-    );
-
-    expect(digest.memberSummaries).toHaveLength(3);
-
-    const alice = digest.memberSummaries.find((m) => m.userId === "user-1")!;
-    expect(alice.totalHours).toBe(7.5);
-    expect(alice.tasksCompleted).toEqual(["Fix login bug", "Add tests"]);
-    expect(alice.outputNote).toBe("Finished auth module");
-
-    const bob = digest.memberSummaries.find((m) => m.userId === "user-2")!;
-    expect(bob.totalHours).toBe(6.0);
-    expect(bob.tasksCompleted).toEqual(["Update docs"]);
-    expect(bob.outputNote).toBeNull();
-
-    // Charlie had no activity
-    const charlie = digest.memberSummaries.find((m) => m.userId === "user-3")!;
-    expect(charlie.totalHours).toBe(0);
-    expect(charlie.tasksCompleted).toEqual([]);
-    expect(charlie.outputNote).toBeNull();
-  });
-
-  it("lists members on leave today (Req 12.3)", () => {
-    const todayTs = Date.UTC(2025, 2, 18) / 1000; // March 18
-
-    const leaveRequests: LeaveRequest[] = [
-      makeLeaveRequest({
-        id: "lr-1",
-        requesterId: "user-2",
-        type: "annual",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "approved",
-      }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      [],
-      leaveRequests,
-      members,
-    );
-
-    expect(digest.onLeaveToday).toEqual(["Bob"]);
-    expect(digest.onWfhToday).toEqual([]);
-  });
-
-  it("lists members on WFH today (Req 12.3)", () => {
-    const todayTs = Date.UTC(2025, 2, 18) / 1000;
-
-    const leaveRequests: LeaveRequest[] = [
-      makeLeaveRequest({
-        id: "lr-1",
-        requesterId: "user-3",
-        type: "wfh",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "approved",
-      }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      [],
-      leaveRequests,
-      members,
-    );
-
-    expect(digest.onLeaveToday).toEqual([]);
-    expect(digest.onWfhToday).toEqual(["Charlie"]);
-  });
-
-  it("separates leave and WFH members correctly", () => {
-    const todayTs = Date.UTC(2025, 2, 18) / 1000;
-
-    const leaveRequests: LeaveRequest[] = [
-      makeLeaveRequest({
-        id: "lr-1",
-        requesterId: "user-1",
-        type: "sick",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "approved",
-      }),
-      makeLeaveRequest({
-        id: "lr-2",
-        requesterId: "user-3",
-        type: "wfh",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "approved",
-      }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      [],
-      leaveRequests,
-      members,
-    );
-
-    expect(digest.onLeaveToday).toEqual(["Alice"]);
-    expect(digest.onWfhToday).toEqual(["Charlie"]);
-  });
-
-  it("ignores pending/declined leave requests", () => {
-    const todayTs = Date.UTC(2025, 2, 18) / 1000;
-
-    const leaveRequests: LeaveRequest[] = [
-      makeLeaveRequest({
-        id: "lr-1",
-        requesterId: "user-1",
-        type: "annual",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "pending",
-      }),
-      makeLeaveRequest({
-        id: "lr-2",
-        requesterId: "user-2",
-        type: "annual",
-        startDate: todayTs,
-        endDate: todayTs + 86400,
-        status: "declined",
-      }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      [],
-      leaveRequests,
-      members,
-    );
-
-    expect(digest.onLeaveToday).toEqual([]);
-    expect(digest.onWfhToday).toEqual([]);
-  });
-
-  it("handles empty team (no members)", () => {
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      [],
-      [],
-      [],
-    );
-
-    expect(digest.memberSummaries).toEqual([]);
-    expect(digest.onLeaveToday).toEqual([]);
-    expect(digest.onWfhToday).toEqual([]);
-  });
-
-  it("only uses attendance from the previous workday, not other dates", () => {
-    const attendance: AttendanceRecord[] = [
-      makeAttendanceRecord({
-        userId: "user-1",
-        date: "2025-03-17",
-        totalHours: 8.0,
-        outputNote: "Correct day",
-      }),
-      makeAttendanceRecord({
-        userId: "user-1",
-        date: "2025-03-16",
-        totalHours: 5.0,
-        outputNote: "Wrong day",
-      }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      attendance,
-      [],
-      [],
-      members,
-    );
-
-    const alice = digest.memberSummaries.find((m) => m.userId === "user-1")!;
-    expect(alice.totalHours).toBe(8.0);
-    expect(alice.outputNote).toBe("Correct day");
-  });
-
-  it("sets correct metadata fields", () => {
-    const digest = generateMorningDigest(
-      "digest-42",
-      today,
-      previousWorkday,
-      [],
-      [],
-      [],
-      members,
-    );
-
-    expect(digest.id).toBe("digest-42");
-    expect(digest.date).toBe("2025-03-18");
-    expect(digest.createdAt).toBeGreaterThan(0);
-  });
-
-  it("only includes tasks with status 'done' and an assignee", () => {
-    const completedTasks: Task[] = [
-      makeTask({ id: "t1", title: "Done task", assigneeId: "user-1", status: "done" }),
-      makeTask({ id: "t2", title: "Open task", assigneeId: "user-1", status: "open" }),
-      makeTask({ id: "t3", title: "Unassigned task", assigneeId: null, status: "done" }),
-    ];
-
-    const digest = generateMorningDigest(
-      "digest-1",
-      today,
-      previousWorkday,
-      [],
-      completedTasks,
-      [],
-      members,
-    );
-
-    const alice = digest.memberSummaries.find((m) => m.userId === "user-1")!;
-    expect(alice.tasksCompleted).toEqual(["Done task"]);
-  });
-});

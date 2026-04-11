@@ -10,9 +10,9 @@ import { useUiStore } from "@/stores/uiStore";
 /**
  * Property 15: Private data never synced
  *
- * For any write to the mood_checks or focus_score_history tables,
+ * For any write to the focus_score_history table,
  * no corresponding entry should ever appear in the sync queue.
- * These tables are excluded from the sync service's collection list.
+ * This table is excluded from the sync service's collection list.
  *
  * **Validates: Requirements 16.3, 16.4, 19.3, 25.1, 25.3**
  */

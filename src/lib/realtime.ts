@@ -1,21 +1,33 @@
 /**
  * PocketBase Realtime Manager
  *
- * Manages WebSocket subscriptions for the live team view.
- * Subscribes to active sessions, session_tasks, and breaks,
- * updating the teamStore on incoming events.
+ * Manages WebSocket subscriptions for the live team view and
+ * governance data (equity_stakes, review_cycles, dilution_events).
+ * Subscribes to active sessions, session_tasks, breaks, and
+ * governance collections — updating teamStore, equityStore, and
+ * reviewStore on incoming events.
  *
  * Handles disconnection with exponential backoff reconnection
  * and full state refresh on reconnect.
+ *
+ * Requirements: 22.3, 21.1
  */
 
 import type { RecordSubscription } from "pocketbase";
 import { pb } from "@/lib/pocketbase";
 import { useTeamStore } from "@/stores/teamStore";
+import { useEquityStore } from "@/stores/equityStore";
+import { useReviewStore } from "@/stores/reviewStore";
 import type { TeamMemberStatus } from "@/types";
 
 export interface TeamEvent {
-  type: "session_update" | "task_update" | "break_update";
+  type:
+    | "session_update"
+    | "task_update"
+    | "break_update"
+    | "equity_stake_update"
+    | "review_cycle_update"
+    | "dilution_event_update";
   userId: string;
   record: Record<string, unknown>;
   action: "create" | "update" | "delete";
@@ -171,7 +183,7 @@ export class RealtimeManager {
     }
   }
 
-  /** Subscribe to sessions, session_tasks, and breaks collections. */
+  /** Subscribe to sessions, session_tasks, breaks, and governance collections. */
   private async _subscribeAll(): Promise<void> {
     this._unsubscribeAll();
 
@@ -197,6 +209,31 @@ export class RealtimeManager {
     this._unsubscribers.push(() => {
       pb.collection("breaks").unsubscribe("*").catch(() => {});
       void breakUnsub;
+    });
+
+    // Governance subscriptions (Req 22.3, 21.1)
+    const equityStakesUnsub = await pb
+      .collection("equity_stakes")
+      .subscribe("*", (e) => this._handleGovernanceEvent(e, "equity_stake_update"));
+    this._unsubscribers.push(() => {
+      pb.collection("equity_stakes").unsubscribe("*").catch(() => {});
+      void equityStakesUnsub;
+    });
+
+    const reviewCyclesUnsub = await pb
+      .collection("review_cycles")
+      .subscribe("*", (e) => this._handleGovernanceEvent(e, "review_cycle_update"));
+    this._unsubscribers.push(() => {
+      pb.collection("review_cycles").unsubscribe("*").catch(() => {});
+      void reviewCyclesUnsub;
+    });
+
+    const dilutionEventsUnsub = await pb
+      .collection("dilution_events")
+      .subscribe("*", (e) => this._handleGovernanceEvent(e, "dilution_event_update"));
+    this._unsubscribers.push(() => {
+      pb.collection("dilution_events").unsubscribe("*").catch(() => {});
+      void dilutionEventsUnsub;
     });
   }
 
@@ -305,6 +342,39 @@ export class RealtimeManager {
       action: e.action as "create" | "update" | "delete",
     };
     void sessionId;
+
+    this._notifyListeners(event);
+  }
+
+  /**
+   * Handle governance collection events (equity_stakes, review_cycles, dilution_events).
+   * Triggers store refreshes so the UI updates within 3 seconds of a change (Req 22.3).
+   */
+  private _handleGovernanceEvent(
+    e: RecordSubscription,
+    type: "equity_stake_update" | "review_cycle_update" | "dilution_event_update",
+  ): void {
+    this._lastUpdateTime = Date.now();
+    const record = e.record;
+
+    // Refresh the appropriate store(s) based on event type
+    if (type === "equity_stake_update" || type === "dilution_event_update") {
+      useEquityStore.getState().refresh();
+    }
+    if (type === "review_cycle_update") {
+      useReviewStore.getState().refresh();
+    }
+    // Dilution events also affect review context (consecutive warnings)
+    if (type === "dilution_event_update") {
+      useReviewStore.getState().refresh();
+    }
+
+    const event: TeamEvent = {
+      type,
+      userId: (record.founderId as string) ?? "",
+      record: record as unknown as Record<string, unknown>,
+      action: e.action as "create" | "update" | "delete",
+    };
 
     this._notifyListeners(event);
   }

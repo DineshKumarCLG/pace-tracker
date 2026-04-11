@@ -1,18 +1,18 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 import { generateEndOfDayReport } from "@/lib/reports";
-import type { Session, SessionTask, Break, Meeting, GitEvent, Task } from "@/types";
+import type { Session, SessionTask, Break, GitEvent, Task } from "@/types";
 
 /**
  * Property 24: End-of-day report completeness
  *
- * For any closed session with associated session_tasks, breaks, meetings,
+ * For any closed session with associated session_tasks, breaks,
  * and git_events, the generated end-of-day report should contain:
  * total session minutes, one entry per task with minutes, one entry per
- * break with type and minutes, one entry per meeting with title, the
- * session's output note, and one entry per git commit.
+ * break with type and minutes, the session's output note, and one entry
+ * per git commit.
  *
- * **Validates: Requirements 11.1, 11.2, 20.4**
+ * **Validates: Requirements 11.1, 11.2**
  */
 
 // --- Arbitraries ---
@@ -89,23 +89,6 @@ function closedBreakArb(
     }));
 }
 
-function meetingArb(breakId: string, sessionId: string): fc.Arbitrary<Meeting> {
-  return fc
-    .record({
-      id: fc.uuid(),
-      title: fc.string({ minLength: 1, maxLength: 50 }),
-      attendees: fc.option(fc.string({ minLength: 1, maxLength: 40 }), { nil: null }),
-    })
-    .map(({ id, title, attendees }) => ({
-      id,
-      breakId,
-      sessionId,
-      title,
-      attendees,
-      createdAt: 1_700_000_000,
-    }));
-}
-
 function gitEventArb(sessionId: string, userId: string): fc.Arbitrary<GitEvent> {
   return fc
     .record({
@@ -153,7 +136,6 @@ describe("Property 24: End-of-day report completeness", () => {
           [],
           [],
           [],
-          [],
           {},
         );
 
@@ -191,7 +173,6 @@ describe("Property 24: End-of-day report completeness", () => {
             session,
             [],
             breaks,
-            [],
             [],
             {},
           );
@@ -243,7 +224,6 @@ describe("Property 24: End-of-day report completeness", () => {
               [st],
               [],
               [],
-              [],
               tasksById,
             );
 
@@ -254,7 +234,6 @@ describe("Property 24: End-of-day report completeness", () => {
             const report = generateEndOfDayReport(
               "report-id",
               session,
-              [],
               [],
               [],
               [],
@@ -311,58 +290,10 @@ describe("Property 24: End-of-day report completeness", () => {
             [],
             breaks,
             [],
-            [],
             {},
           );
 
           expect(report.breaks).toHaveLength(closedCount);
-        },
-      ),
-      { numRuns: 200 },
-    );
-  });
-
-  it("meetings count matches meeting input count", () => {
-    fc.assert(
-      fc.property(
-        sessionArb(),
-        fc.integer({ min: 0, max: 6 }),
-        (session, meetingCount) => {
-          const sessionEnd = session.endTime!;
-          const breaks: Break[] = [];
-          const meetings: Meeting[] = [];
-
-          for (let i = 0; i < meetingCount; i++) {
-            const breakId = `b-${i}`;
-            breaks.push({
-              id: breakId,
-              sessionId: session.id,
-              startTime: session.startTime + i * 1800,
-              endTime: Math.min(session.startTime + i * 1800 + 900, sessionEnd),
-              type: "meeting",
-              autoDetected: false,
-            });
-            meetings.push({
-              id: `m-${i}`,
-              breakId,
-              sessionId: session.id,
-              title: `Meeting ${i}`,
-              attendees: null,
-              createdAt: 1_700_000_000,
-            });
-          }
-
-          const report = generateEndOfDayReport(
-            "report-id",
-            session,
-            [],
-            breaks,
-            meetings,
-            [],
-            {},
-          );
-
-          expect(report.meetings).toHaveLength(meetingCount);
         },
       ),
       { numRuns: 200 },
@@ -393,7 +324,6 @@ describe("Property 24: End-of-day report completeness", () => {
             session,
             [],
             [],
-            [],
             gitEvents,
             {},
           );
@@ -411,7 +341,6 @@ describe("Property 24: End-of-day report completeness", () => {
         const report = generateEndOfDayReport(
           "report-id",
           session,
-          [],
           [],
           [],
           [],

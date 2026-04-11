@@ -22,7 +22,7 @@
       "csp": null
     },
     "trayIcon": {
-      "iconPath": "icons/.gitkeep",
+      "iconPath": "icons/icon.ico",
       "iconAsTemplate": true
     }
   },
@@ -30,7 +30,7 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/.gitkeep"
+      "icons/icon.ico"
     ]
   }
 }

@@ -27,11 +27,6 @@ interface ParseTaskRequest {
   model?: string;
 }
 
-interface StandupRequest {
-  userId: string;
-  model?: string;
-}
-
 interface EstimateTaskRequest {
   taskTitle: string;
   projectId: string;
@@ -46,7 +41,6 @@ interface TeamHealthRequest {
 type AIRequestPayload =
   | WeeklyReviewRequest
   | ParseTaskRequest
-  | StandupRequest
   | EstimateTaskRequest
   | TeamHealthRequest;
 
@@ -172,18 +166,6 @@ function buildParseTaskPayload(
 }
 
 /**
- * Construct a standup request payload.
- */
-function buildStandupPayload(
-  userId: string,
-  model?: string,
-): StandupRequest {
-  const payload: StandupRequest = { userId };
-  if (model) payload.model = model;
-  return payload;
-}
-
-/**
  * Construct an estimate-task request payload.
  */
 function buildEstimateTaskPayload(
@@ -264,16 +246,6 @@ describe("Property 14: API Key Isolation", () => {
           expect(payloadContainsNoCredentials(payload as unknown as Record<string, unknown>)).toBe(true);
         },
       ),
-      { numRuns: 200 },
-    );
-  });
-
-  it("standup request payload contains no API keys or credentials", () => {
-    fc.assert(
-      fc.property(userIdArb, modelArb, (userId, model) => {
-        const payload = buildStandupPayload(userId, model);
-        expect(payloadContainsNoCredentials(payload as unknown as Record<string, unknown>)).toBe(true);
-      }),
       { numRuns: 200 },
     );
   });

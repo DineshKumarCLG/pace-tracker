@@ -676,3 +676,286 @@ Property tests verify universal invariants across randomized inputs. Each proper
 ---
 
 *End of document.*
+
+
+---
+
+## 15. Founder Accountability & Governance
+
+PACE includes a founder-level accountability system designed for early-stage startups where every co-founder's contribution directly impacts survival. These features are visible only to founders (not employees/interns) and are opt-in per company.
+
+### 15.1 Founder Peer Review (Biweekly)
+
+Every 2 weeks, each founder anonymously ranks all other founders on a 1–5 scale across three dimensions:
+- **Output quality** — Did they ship meaningful work?
+- **Reliability** — Did they show up consistently?
+- **Initiative** — Did they drive things forward without being asked?
+
+**Rules:**
+- Rankings are anonymous but the aggregate results are visible to all founders
+- Each founder sees their own score and the team average
+- CEO serves as tie-breaker in disputed rankings
+- Review window opens Friday, closes Sunday — 48 hours to submit
+- Missing a review counts as abstaining (no penalty, no score impact)
+
+**Warning system:**
+- Lowest-ranked founder in a cycle receives a formal warning (visible to all founders)
+- 2 consecutive warnings in a row triggers equity dilution: 1% of that founder's stake moves to the company pool
+- Dilution is logged permanently in the Equity Dashboard
+- A founder can appeal within 7 days — appeal reviewed by remaining founders
+
+### 15.2 Founder Leaderboard (Opt-in per Company)
+
+Weekly performance score computed from tracked data:
+
+```
+Score = (hours_logged × 0.3) + (tasks_completed × 0.4) + (peer_review_score × 0.3)
+```
+
+- Normalized to 0–100 scale
+- Visible ONLY to founders (hidden from employees, interns, external)
+- Top performer receives "Founder of the Week" badge on their profile
+- No equity consequences — recognition only
+- Can be disabled entirely from Settings > Governance
+
+**Leaderboard display:**
+- Ranked list with score, hours, tasks, and peer score breakdown
+- 4-week trend line per founder
+- "Consistency bonus" for founders who maintain top-3 for 4+ consecutive weeks
+
+### 15.3 Equity Stake Tracking
+
+Each founder sees their ownership position in real time:
+
+| Field | Description |
+|-------|-------------|
+| Current stake | e.g., "You own 15.0% of the company" |
+| Vesting progress | e.g., "40% vested (12 of 30 months), 60% unvested" |
+| Cliff status | e.g., "Cliff passed (Month 6)" or "3 months to cliff" |
+| Dilution history | Log of all dilution events with dates and reasons |
+| Impact projection | "If company sells for $1M, your share = $150K pre-tax" |
+| Warning flags | "You are 1 warning away from dilution trigger" |
+
+**Data source:** Manual entry by CEO/admin during onboarding. Updated when equity events occur (dilution, new round, option grants).
+
+**Cap table view** (founder-only):
+- All founders' stakes in a pie chart
+- Company pool percentage
+- Total dilution from accountability system
+- Vesting timeline visualization
+
+### 15.4 Visibility Tiers
+
+Four data access levels:
+
+| Tier | Who sees it | What's included |
+|------|------------|-----------------|
+| Everyone | All team members | Team hours, task completion, attendance, output notes, streaks, leave calendar |
+| Founders only | Co-founders | Leaderboard, equity status, peer reviews, accountability warnings, strategic metrics |
+| Admin only | CEO / designated admin | Payroll data, dilution triggers, appeal decisions, sensitive governance actions |
+| Individual only | The person themselves | Focus score, mood check-ins, energy trends |
+
+**Implementation:**
+- Each data record tagged with `visibilityTier: "everyone" | "founders" | "admin" | "individual"`
+- Auth guard checks user role before rendering tier-restricted components
+- PocketBase collection rules enforce server-side access control
+- Founder role assigned during onboarding (team creator = admin, joiners = founder by default)
+
+### 15.5 Startup Health Dashboard
+
+Founder-specific metrics that answer strategic questions:
+
+| Metric | Formula | Question it answers |
+|--------|---------|-------------------|
+| Runway indicator | `milestones_on_track / total_milestones × 100` | Are we working enough to hit our milestones? |
+| Founder balance | `max(founder_hours) - min(founder_hours)` over 4 weeks | Is one founder carrying the team? |
+| Decision velocity | `tasks_completed_this_month / tasks_completed_last_month` | Are we shipping faster or slower? |
+| Burn rate alignment | `avg_daily_hours × team_size` vs. target (configurable) | Are we working hard enough to justify our burn? |
+| Investor-ready summary | Auto-generated weekly summary with hours, tasks, milestones, team health | Can we send this to investors as-is? |
+
+**Investor-ready summary** (auto-generated, exportable as PDF):
+- Total team hours this week
+- Tasks completed and milestones hit
+- Team availability and leave impact
+- Key output notes (curated by AI)
+- Formatted with PACE branding, ready for board updates or investor emails
+
+**Alerts:**
+- "Founder balance alert" when hour gap between founders exceeds 30% over 2 weeks
+- "Velocity drop" when decision velocity falls below 0.8× previous month
+- "Milestone risk" when a milestone is within 7 days and <50% tasks complete
+
+---
+
+## 16. New Screens (Governance)
+
+| # | Screen | Route | Visibility | Purpose |
+|---|--------|-------|-----------|---------|
+| 15 | Founder Review | `/founder-review` | Founders only | Biweekly peer ranking submission and results |
+| 16 | Leaderboard | `/leaderboard` | Founders only | Weekly performance scores and trends |
+| 17 | Equity Dashboard | `/equity` | Founders only | Cap table, vesting, projections, dilution log |
+| 18 | Startup Health | `/startup-health` | Founders only | Runway, balance, velocity, investor summary |
+
+These screens are hidden from the sidebar for non-founder users. Founder role is determined by the `role` field in the users collection.
+
+---
+
+## 17. New Data Models (Governance)
+
+### FounderReview
+```sql
+CREATE TABLE founder_reviews (
+    id TEXT PRIMARY KEY,
+    cycleId TEXT NOT NULL,
+    reviewerId TEXT NOT NULL REFERENCES users(id),
+    revieweeId TEXT NOT NULL REFERENCES users(id),
+    outputScore INTEGER NOT NULL CHECK(outputScore >= 1 AND outputScore <= 5),
+    reliabilityScore INTEGER NOT NULL CHECK(reliabilityScore >= 1 AND reliabilityScore <= 5),
+    initiativeScore INTEGER NOT NULL CHECK(initiativeScore >= 1 AND initiativeScore <= 5),
+    createdAt INTEGER NOT NULL,
+    CHECK(reviewerId != revieweeId)
+);
+```
+
+### EquityStake
+```sql
+CREATE TABLE equity_stakes (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL REFERENCES users(id),
+    currentPct REAL NOT NULL,
+    vestedPct REAL NOT NULL,
+    vestingStartDate INTEGER NOT NULL,
+    vestingMonths INTEGER NOT NULL DEFAULT 48,
+    cliffMonths INTEGER NOT NULL DEFAULT 12,
+    updatedAt INTEGER NOT NULL
+);
+```
+
+### DilutionEvent
+```sql
+CREATE TABLE dilution_events (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL REFERENCES users(id),
+    previousPct REAL NOT NULL,
+    newPct REAL NOT NULL,
+    reason TEXT NOT NULL,
+    cycleId TEXT,
+    createdAt INTEGER NOT NULL
+);
+```
+
+### AccountabilityWarning
+```sql
+CREATE TABLE accountability_warnings (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL REFERENCES users(id),
+    cycleId TEXT NOT NULL,
+    warningNumber INTEGER NOT NULL,
+    createdAt INTEGER NOT NULL
+);
+```
+
+---
+
+*End of document.*
+
+
+---
+
+## 18. Active Window Awareness
+
+PACE tracks the foreground application name (not URLs, not content, not screenshots) to provide smarter idle classification and app usage insights.
+
+### 18.1 How It Works
+
+A Rust background thread polls the active window title and process name every 30 seconds during an active session. For browsers, the window title includes the tab/page name (e.g., "Instagram • Photos — Chrome"), which is used for classification. Raw URLs are never captured.
+
+**What is captured:**
+- Process name (e.g., "Google Chrome", "Figma", "VS Code")
+- Window title (e.g., "Instagram • Photos — Chrome", "main.rs — PACE — VS Code")
+- Timestamp
+
+**What is NOT captured:**
+- URLs
+- Page content
+- Screenshots
+- Keystrokes
+
+### 18.2 App & Site Categories
+
+Users configure categories using app names and keyword rules:
+
+| Category | Default Rules | Idle Behavior |
+|----------|--------------|---------------|
+| Productive | VS Code, Figma, Notion, Terminal, Xcode, IntelliJ, Slack, "stackoverflow", "github", "docs.google", "linear", "jira" | Idle timer extended to 30 min (deep thinking) |
+| Neutral | Finder, File Explorer, Calculator, "google search", "pinterest", "miro", "whimsical" | Normal idle detection (default threshold) |
+| Distracted | "instagram", "facebook", "twitter", "tiktok", "youtube" (non-tutorial), "reddit", "netflix", "twitch" | Idle timer reduced to 10 min, flagged |
+
+**Keyword matching for browsers:**
+- When the active app is a browser (Chrome, Firefox, Safari, Edge, Arc), the window title is checked against keyword rules
+- "Instagram • Photos — Chrome" → matches "instagram" → Distracted
+- "Pinterest — Design Inspiration — Chrome" → matches "pinterest" → Neutral (configurable to Productive)
+- "Stack Overflow — How to fix CORS — Chrome" → matches "stackoverflow" → Productive
+- "YouTube — React Tutorial — Chrome" → matches "youtube" → Distracted by default, but user can add "youtube tutorial" as Productive override
+
+**Custom rules:** Users add keyword → category mappings in Settings. More specific rules take priority (e.g., "youtube tutorial" overrides "youtube").
+
+### 18.3 Session Timeline Integration
+
+The session timeline shows app usage segments alongside work/break/away segments:
+
+```
+9:14am ──────────────────────────────────────── 5:30pm
+[VS Code ████████][Figma ████][Chrome ██][VS Code ████████████]
+[Working ████████████████][Break ░░░][Working ████████████████]
+```
+
+### 18.4 Analytics Integration
+
+App usage data feeds into analytics:
+- "Top apps this week" — ranked by time spent
+- "Productive vs. distracted ratio" — % of session time in productive apps
+- "Focus blocks" — uninterrupted stretches in a single productive app (>30 min)
+- Private to the individual user (not team-visible) unless the team opts in
+
+### 18.5 Smart Idle Override
+
+When the system detects idle (no mouse/keyboard input for 15+ min):
+1. Check the foreground app
+2. If app is in "Productive" category → extend idle threshold to 30 min (designer thinking)
+3. If app is in "Distracted" category → reduce idle threshold to 10 min
+4. If app is in "Neutral" → use default threshold
+
+This prevents false "away" classifications for designers brainstorming in Figma while giving faster feedback when someone drifts to social media.
+
+### 18.6 Privacy Controls
+
+- Window titles ARE captured for classification but stored as category labels only (e.g., "Productive: VS Code" not the full title)
+- After classification, the raw window title is discarded — only app name + category are persisted
+- URLs are NEVER captured or stored
+- Screenshots are NEVER taken
+- App usage data is local-only by default (can be opted into team visibility)
+- Users can disable app tracking entirely in Settings
+- "Distracted" time is private — only the individual sees the breakdown
+- Team view (if opted in) shows only "Productive: 5h, Neutral: 1h" — never specific app names or sites
+
+### 18.7 Implementation
+
+Rust side (`src-tauri/src/window_tracker.rs`):
+- macOS: `NSWorkspace.shared.frontmostApplication` via objc bindings
+- Windows: `GetForegroundWindow()` + `GetWindowThreadProcessId()` via windows-rs
+- Linux: `xdotool getactivewindow getwindowpid` via shell
+
+Stored in SQLite table:
+```sql
+CREATE TABLE app_usage (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL REFERENCES sessions(id),
+    appName TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('productive', 'neutral', 'distracted')),
+    startTime INTEGER NOT NULL,
+    endTime INTEGER,
+    createdAt INTEGER NOT NULL
+);
+CREATE INDEX idx_app_usage_session ON app_usage(sessionId);
+```

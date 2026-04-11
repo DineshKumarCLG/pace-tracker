@@ -1,10 +1,10 @@
 /**
- * OS notification helpers for PACE v2 Team Ops.
+ * OS notification helpers for PACE v2 Team Ops and Founder Governance.
  *
  * All functions use @tauri-apps/plugin-notification with graceful fallback:
  * if not running in Tauri or permissions are denied, they silently no-op.
  *
- * Requirements: 6.4, 7.3, 12.4, 24.4
+ * Requirements: 1.2, 6.4, 7.3, 12.4, 24.4
  */
 
 import { isTauri } from "@/lib/tauri";
@@ -85,14 +85,76 @@ export async function notifySyncConflict(details: string): Promise<void> {
   );
 }
 
+
+// ── Founder Governance Notifications ──────────────────────────────────
+// Requirement: 1.2
+
 /**
- * Notify the founder that the morning digest is ready.
+ * Notify all founders that a new peer review cycle is open for submission.
  *
- * Requirement: 12.4
+ * Requirement: 1.2
  */
-export async function notifyMorningDigest(): Promise<void> {
+export async function notifyReviewCycleOpen(): Promise<void> {
   await sendOsNotification(
-    "Morning Digest Ready",
-    "Your team's morning digest is ready. Check the Daily Digest screen for yesterday's summary.",
+    "Peer Review Cycle Open",
+    "A new peer review cycle is open for submission.",
+  );
+}
+
+/**
+ * Notify founders that the submission deadline is approaching (24h before).
+ *
+ * Requirement: 1.2
+ *
+ * @param deadline - Human-readable deadline string (e.g. "Jul 18, 2025 at 5:00 PM")
+ */
+export async function notifyDeadlineApproaching(deadline: string): Promise<void> {
+  await sendOsNotification(
+    "Review Deadline Approaching",
+    `Peer review submission deadline in 24 hours (${deadline}).`,
+  );
+}
+
+/**
+ * Notify all founders that peer review results are now available.
+ *
+ * Requirement: 1.2
+ */
+export async function notifyReviewResultsAvailable(): Promise<void> {
+  await sendOsNotification(
+    "Review Results Available",
+    "Peer review results are now available. View them on the Founder Review screen.",
+  );
+}
+
+/**
+ * Notify founders when an accountability warning is issued.
+ *
+ * Requirement: 1.2
+ *
+ * @param founderName - Name of the founder who received the warning
+ */
+export async function notifyAccountabilityWarning(founderName: string): Promise<void> {
+  await sendOsNotification(
+    "Accountability Warning Issued",
+    `An accountability warning has been issued to ${founderName}.`,
+  );
+}
+
+/**
+ * Notify founders when a dilution event is triggered due to consecutive warnings.
+ *
+ * Requirements: 2.5, 6.5
+ *
+ * @param founderName - Name of the founder whose equity was diluted
+ * @param dilutionPct - The percentage of equity diluted (e.g. 1.0)
+ */
+export async function notifyDilutionTriggered(
+  founderName: string,
+  dilutionPct: number,
+): Promise<void> {
+  await sendOsNotification(
+    "Equity Dilution Triggered",
+    `${founderName}'s equity has been reduced by ${dilutionPct}% due to consecutive accountability warnings.`,
   );
 }

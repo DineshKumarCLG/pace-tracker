@@ -17,9 +17,13 @@ import AttendanceScreen from "@/screens/Attendance";
 import DashboardScreen from "@/screens/Dashboard";
 import AnalyticsScreen from "@/screens/Analytics";
 import DigestScreen from "@/screens/Digest";
-import MonthlyScreen from "@/screens/Monthly";
 import OnboardingScreen from "@/screens/Onboarding";
 import AuthScreen from "@/screens/Auth";
+import FounderReviewScreen from "@/screens/FounderReview";
+import LeaderboardScreen from "@/screens/Leaderboard";
+import EquityScreen from "@/screens/Equity";
+import StartupHealthScreen from "@/screens/StartupHealth";
+import FounderGuard from "@/components/FounderGuard";
 
 /* ── Root route ── */
 const rootRoute = createRootRoute({
@@ -117,10 +121,45 @@ const digestRoute = createRoute({
   component: DigestScreen,
 });
 
-const monthlyRoute = createRoute({
+/* ── Governance routes (founder-only, sidebar visible) ── */
+const founderReviewRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/monthly",
-  component: MonthlyScreen,
+  path: "/founder-review",
+  component: () => (
+    <FounderGuard>
+      <FounderReviewScreen />
+    </FounderGuard>
+  ),
+});
+
+const leaderboardRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/leaderboard",
+  component: () => (
+    <FounderGuard>
+      <LeaderboardScreen />
+    </FounderGuard>
+  ),
+});
+
+const equityRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/equity",
+  component: () => (
+    <FounderGuard>
+      <EquityScreen />
+    </FounderGuard>
+  ),
+});
+
+const startupHealthRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/startup-health",
+  component: () => (
+    <FounderGuard>
+      <StartupHealthScreen />
+    </FounderGuard>
+  ),
 });
 
 /* ── Auth (no sidebar — direct child of root) ── */
@@ -151,7 +190,10 @@ const routeTree = rootRoute.addChildren([
     dashboardRoute,
     analyticsRoute,
     digestRoute,
-    monthlyRoute,
+    founderReviewRoute,
+    leaderboardRoute,
+    equityRoute,
+    startupHealthRoute,
   ]),
   authRoute,
   onboardingRoute,

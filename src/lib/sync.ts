@@ -46,7 +46,9 @@ const MAX_RETRIES = 5;
  * Collections that are synced to PocketBase.
  * v1: sessions, breaks, tasks, projects, idle_events, output_notes
  * v2: leave_requests, public_holidays, milestones, milestone_tasks,
- *     standup_responses, meetings, daily_reports, morning_digests
+ *     daily_reports
+ * v3: review_cycles, founder_reviews, accountability_warnings,
+ *     equity_stakes, dilution_events, decisions
  */
 export const SYNCED_COLLECTIONS = [
   // v1
@@ -61,14 +63,18 @@ export const SYNCED_COLLECTIONS = [
   "public_holidays",
   "milestones",
   "milestone_tasks",
-  "standup_responses",
-  "meetings",
   "daily_reports",
-  "morning_digests",
   // v2 workspace proof
   "workspace_proofs",
   "workspace_locations",
   "office_zones",
+  // v3 governance
+  "review_cycles",
+  "founder_reviews",
+  "accountability_warnings",
+  "equity_stakes",
+  "dilution_events",
+  "decisions",
 ] as const;
 
 /**
@@ -77,8 +83,16 @@ export const SYNCED_COLLECTIONS = [
  * Requirements: 16.3, 16.4, 19.3, 25.1, 25.3
  */
 export const PRIVATE_COLLECTIONS = [
-  "mood_checks",
   "focus_score_history",
+] as const;
+
+/**
+ * Local-only collections that must NEVER be synced to PocketBase.
+ * These contain per-device settings that are not shared across devices.
+ * Requirements: 21.1, 21.3
+ */
+export const LOCAL_ONLY_COLLECTIONS = [
+  "startup_health_config",
 ] as const;
 
 /**
@@ -127,6 +141,12 @@ export class SyncService {
     if ((PRIVATE_COLLECTIONS as readonly string[]).includes(collection)) {
       throw new Error(
         `Collection "${collection}" is private and must not be synced`,
+      );
+    }
+
+    if ((LOCAL_ONLY_COLLECTIONS as readonly string[]).includes(collection)) {
+      throw new Error(
+        `Collection "${collection}" is local-only and must not be synced`,
       );
     }
 

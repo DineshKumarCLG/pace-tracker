@@ -13,16 +13,21 @@ import {
   ClipboardCheck,
   TrendingUp,
   Newspaper,
-  FileText,
+  UserCheck,
+  Trophy,
+  PieChart,
+  HeartPulse,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
+import { isFounder } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
 
-const navItems: Array<
+type NavItem =
   | { type: "item"; to: string; label: string; icon: typeof LayoutDashboard }
-  | { type: "divider"; label: string }
-> = [
+  | { type: "divider"; label: string };
+
+const baseNavItems: NavItem[] = [
   { type: "item", to: "/", label: "Today", icon: LayoutDashboard },
   { type: "item", to: "/team", label: "Team", icon: Users },
   { type: "item", to: "/tasks", label: "Tasks", icon: CheckSquare },
@@ -34,7 +39,17 @@ const navItems: Array<
   { type: "item", to: "/requests", label: "Requests", icon: ClipboardCheck },
   { type: "item", to: "/analytics", label: "Analytics", icon: TrendingUp },
   { type: "item", to: "/digest", label: "Digest", icon: Newspaper },
-  { type: "item", to: "/monthly", label: "Monthly", icon: FileText },
+];
+
+const governanceNavItems: NavItem[] = [
+  { type: "divider", label: "Governance" },
+  { type: "item", to: "/founder-review", label: "Founder Review", icon: UserCheck },
+  { type: "item", to: "/leaderboard", label: "Leaderboard", icon: Trophy },
+  { type: "item", to: "/equity", label: "Equity", icon: PieChart },
+  { type: "item", to: "/startup-health", label: "Startup Health", icon: HeartPulse },
+];
+
+const bottomNavItems: NavItem[] = [
   { type: "divider", label: "" },
   { type: "item", to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -46,6 +61,13 @@ export default function Sidebar() {
   const [hovered, setHovered] = useState<string | null>(null);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const showGovernance = isFounder(user?.role ?? null);
+
+  const navItems: NavItem[] = [
+    ...baseNavItems,
+    ...(showGovernance ? governanceNavItems : []),
+    ...bottomNavItems,
+  ];
 
   return (
     <aside className="relative flex h-screen w-[220px] flex-col">

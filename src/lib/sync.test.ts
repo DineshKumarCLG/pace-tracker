@@ -4,6 +4,7 @@ import {
   computeBackoffMs,
   SYNCED_COLLECTIONS,
   PRIVATE_COLLECTIONS,
+  LOCAL_ONLY_COLLECTIONS,
   type PocketBaseCaller,
 } from "./sync";
 import { useUiStore } from "@/stores/uiStore";
@@ -274,10 +275,7 @@ describe("SyncService", () => {
         "public_holidays",
         "milestones",
         "milestone_tasks",
-        "standup_responses",
-        "meetings",
         "daily_reports",
-        "morning_digests",
       ];
       for (const col of v2Collections) {
         expect(SYNCED_COLLECTIONS).toContain(col);
@@ -290,8 +288,13 @@ describe("SyncService", () => {
       }
     });
 
-    it("PRIVATE_COLLECTIONS includes mood_checks and focus_score_history", () => {
-      expect(PRIVATE_COLLECTIONS).toContain("mood_checks");
+    it("SYNCED_COLLECTIONS does not include local-only collections", () => {
+      for (const col of LOCAL_ONLY_COLLECTIONS) {
+        expect(SYNCED_COLLECTIONS).not.toContain(col);
+      }
+    });
+
+    it("PRIVATE_COLLECTIONS includes focus_score_history", () => {
       expect(PRIVATE_COLLECTIONS).toContain("focus_score_history");
     });
 
@@ -301,17 +304,49 @@ describe("SyncService", () => {
       expect(service.getQueueSize()).toBe(2);
     });
 
-    it("rejects queuing mood_checks", () => {
-      expect(() =>
-        service.queue("mood_checks", "create", "mc1", { energy: 3 }),
-      ).toThrow("private and must not be synced");
-      expect(service.getQueueSize()).toBe(0);
-    });
-
     it("rejects queuing focus_score_history", () => {
       expect(() =>
         service.queue("focus_score_history", "create", "fs1", { score: 85 }),
       ).toThrow("private and must not be synced");
+      expect(service.getQueueSize()).toBe(0);
+    });
+  });
+
+  describe("v3 governance collections", () => {
+    it("SYNCED_COLLECTIONS includes all v3 governance collections", () => {
+      const v3Collections = [
+        "review_cycles",
+        "founder_reviews",
+        "accountability_warnings",
+        "equity_stakes",
+        "dilution_events",
+        "decisions",
+      ];
+      for (const col of v3Collections) {
+        expect(SYNCED_COLLECTIONS).toContain(col);
+      }
+    });
+
+    it("SYNCED_COLLECTIONS does not include startup_health_config", () => {
+      expect(SYNCED_COLLECTIONS).not.toContain("startup_health_config");
+    });
+
+    it("LOCAL_ONLY_COLLECTIONS includes startup_health_config", () => {
+      expect(LOCAL_ONLY_COLLECTIONS).toContain("startup_health_config");
+    });
+
+    it("allows queuing v3 governance collections", () => {
+      service.queue("review_cycles", "create", "rc1", { status: "open" });
+      service.queue("founder_reviews", "create", "fr1", { outputScore: 4 });
+      service.queue("equity_stakes", "create", "es1", { currentStakePct: 25 });
+      service.queue("decisions", "create", "d1", { title: "Hire CTO" });
+      expect(service.getQueueSize()).toBe(4);
+    });
+
+    it("rejects queuing startup_health_config", () => {
+      expect(() =>
+        service.queue("startup_health_config", "create", "shc1", { cashBalance: 100000 }),
+      ).toThrow("local-only and must not be synced");
       expect(service.getQueueSize()).toBe(0);
     });
   });

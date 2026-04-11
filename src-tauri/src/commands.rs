@@ -1115,6 +1115,614 @@ pub fn get_visible_breaks(session_id: String) -> Result<Vec<BreakRecord>, String
 }
 
 // ---------------------------------------------------------------------------
+// Review cycle structs (camelCase for JS interop via serde rename)
+// ---------------------------------------------------------------------------
+
+/// Constants for review cycle scheduling
+const CYCLE_INTERVAL_DAYS: i64 = 14;
+const SUBMISSION_WINDOW_HOURS: i64 = 48;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCycle {
+    pub id: String,
+    #[serde(rename = "startDate")]
+    pub start_date: i64,
+    #[serde(rename = "endDate")]
+    pub end_date: i64,
+    #[serde(rename = "submissionDeadline")]
+    pub submission_deadline: i64,
+    pub status: String,
+    #[serde(rename = "resolvedAt")]
+    pub resolved_at: Option<i64>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewResult {
+    #[serde(rename = "founderId")]
+    pub founder_id: String,
+    #[serde(rename = "outputAvg")]
+    pub output_avg: f64,
+    #[serde(rename = "reliabilityAvg")]
+    pub reliability_avg: f64,
+    #[serde(rename = "initiativeAvg")]
+    pub initiative_avg: f64,
+    #[serde(rename = "overallAvg")]
+    pub overall_avg: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountabilityWarning {
+    pub id: String,
+    #[serde(rename = "founderId")]
+    pub founder_id: String,
+    #[serde(rename = "cycleId")]
+    pub cycle_id: String,
+    #[serde(rename = "issuedAt")]
+    pub issued_at: i64,
+    pub acknowledged: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Accountability helpers (Req 2.4, 2.5)
+// ---------------------------------------------------------------------------
+
+/// Issue an accountability warning for a founder in a cycle.
+/// Returns the created warning.
+fn issue_accountability_warning(
+    conn: &Connection,
+    founder_id: &str,
+    cycle_id: &str,
+    now: i64,
+) -> Result<AccountabilityWarning, String> {
+    let warning_id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT OR IGNORE INTO accountability_warnings (id, founderId, cycleId, issuedAt, acknowledged)
+         VALUES (?1, ?2, ?3, ?4, 0)",
+        params![warning_id, founder_id, cycle_id, now],
+    )
+    .map_err(|e| format!("Failed to insert accountability warning: {e}"))?;
+
+    Ok(AccountabilityWarning {
+        id: warning_id,
+        founder_id: founder_id.to_string(),
+        cycle_id: cycle_id.to_string(),
+        issued_at: now,
+        acknowledged: false,
+    })
+}
+
+/// Check if the founder had a warning in the immediately previous cycle.
+/// If so, trigger a 1% dilution event. (Req 2.5)
+fn check_consecutive_warnings_and_dilute(
+    conn: &Connection,
+    founder_id: &str,
+    cycle_id: &str,
+    now: i64,
+) -> Result<(), String> {
+    // Get the start date of the current cycle
+    let current_start: i64 = conn
+        .query_row(
+            "SELECT startDate FROM review_cycles WHERE id = ?1",
+            params![cycle_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "Current cycle not found".to_string())?;
+
+    // Find the immediately previous cycle (the one with the latest endDate before this cycle's startDate)
+    let prev_cycle_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM review_cycles WHERE endDate <= ?1 ORDER BY endDate DESC LIMIT 1",
+            params![current_start],
+            |r| r.get(0),
+        )
+        .ok();
+
+    if let Some(prev_id) = prev_cycle_id {
+        // Check if the founder had a warning in that previous cycle
+        let prev_warning_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = ?1 AND cycleId = ?2",
+                params![founder_id, prev_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("DB error: {e}"))?;
+
+        if prev_warning_count > 0 {
+            // Two consecutive warnings → trigger 1% dilution
+            trigger_dilution(conn, founder_id, cycle_id, 1.0, now)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Trigger a dilution event: reduce the founder's equity by dilution_pct and
+/// redistribute proportionally among other founders. (Req 2.5, 6.5)
+fn trigger_dilution(
+    conn: &Connection,
+    founder_id: &str,
+    cycle_id: &str,
+    dilution_pct: f64,
+    now: i64,
+) -> Result<(), String> {
+    // Get the founder's current stake
+    let (stake_id, current_pct): (String, f64) = conn
+        .query_row(
+            "SELECT id, currentStakePct FROM equity_stakes WHERE founderId = ?1",
+            params![founder_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| format!("No equity stake found for founder {}", founder_id))?;
+
+    let new_pct = (current_pct - dilution_pct).max(0.0);
+    let amount_to_redistribute = current_pct - new_pct;
+
+    // Update the affected founder's stake
+    conn.execute(
+        "UPDATE equity_stakes SET currentStakePct = ?1, updatedAt = ?2 WHERE id = ?3",
+        params![new_pct, now, stake_id],
+    )
+    .map_err(|e| format!("Failed to update equity stake: {e}"))?;
+
+    // Get all other founders' stakes for redistribution
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, founderId, currentStakePct FROM equity_stakes WHERE founderId != ?1",
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let others: Vec<(String, String, f64)> = stmt
+        .query_map(params![founder_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let total_others: f64 = others.iter().map(|(_, _, pct)| pct).sum();
+
+    // Build redistribution details JSON
+    let mut redistribution = String::from("{");
+    for (i, (other_id, other_founder_id, other_pct)) in others.iter().enumerate() {
+        let share = if total_others > 0.0 {
+            amount_to_redistribute * (other_pct / total_others)
+        } else {
+            amount_to_redistribute / others.len() as f64
+        };
+        let new_other_pct = other_pct + share;
+
+        conn.execute(
+            "UPDATE equity_stakes SET currentStakePct = ?1, updatedAt = ?2 WHERE id = ?3",
+            params![new_other_pct, now, other_id],
+        )
+        .map_err(|e| format!("Failed to update equity stake: {e}"))?;
+
+        if i > 0 {
+            redistribution.push_str(", ");
+        }
+        redistribution.push_str(&format!(
+            "\"{}\": {}",
+            other_founder_id,
+            new_other_pct
+        ));
+    }
+    redistribution.push('}');
+
+    // Insert dilution event record
+    let dilution_id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO dilution_events (id, founderId, cycleId, dilutionPct, previousStakePct, newStakePct, redistributionDetails, createdAt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            dilution_id,
+            founder_id,
+            cycle_id,
+            dilution_pct,
+            current_pct,
+            new_pct,
+            redistribution,
+            now,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert dilution event: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Review cycle core logic (Req 1.1, 1.7, 2.1, 2.6)
+// ---------------------------------------------------------------------------
+
+/// Create a new review cycle. Computes endDate (start + 14 days) and
+/// submissionDeadline (start + 48 hours). Status is "open".
+pub fn create_review_cycle_inner(
+    conn: &Connection,
+    start_date: i64,
+    now: i64,
+) -> Result<ReviewCycle, String> {
+    let end_date = start_date + CYCLE_INTERVAL_DAYS * 24 * 3600;
+    let submission_deadline = start_date + SUBMISSION_WINDOW_HOURS * 3600;
+    let cycle_id = Uuid::new_v4().to_string();
+
+    conn.execute(
+        "INSERT INTO review_cycles (id, startDate, endDate, submissionDeadline, status, createdAt)
+         VALUES (?1, ?2, ?3, ?4, 'open', ?5)",
+        params![cycle_id, start_date, end_date, submission_deadline, now],
+    )
+    .map_err(|e| format!("Failed to insert review cycle: {e}"))?;
+
+    Ok(ReviewCycle {
+        id: cycle_id,
+        start_date,
+        end_date,
+        submission_deadline,
+        status: "open".to_string(),
+        resolved_at: None,
+        created_at: now,
+    })
+}
+
+/// Close a review cycle: compute average scores per founder per dimension,
+/// return sorted results (ascending by overall_avg for accountability).
+/// If exactly one founder is lowest-ranked, auto-issue a warning and resolve.
+/// If tied at the lowest, leave as "closed" for CEO tie-break via resolve_tie.
+/// (Req 1.7, 2.1, 2.2, 2.3, 2.4, 2.5)
+pub fn close_review_cycle_inner(
+    conn: &Connection,
+    cycle_id: &str,
+    now: i64,
+) -> Result<Vec<ReviewResult>, String> {
+    // Verify cycle exists and is "open"
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM review_cycles WHERE id = ?1",
+            params![cycle_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "Review cycle not found".to_string())?;
+
+    if status != "open" {
+        return Err(format!(
+            "Review cycle is '{}', expected 'open'",
+            status
+        ));
+    }
+
+    // Compute average scores per reviewee
+    let mut stmt = conn
+        .prepare(
+            "SELECT revieweeId,
+                    AVG(CAST(outputScore AS REAL)),
+                    AVG(CAST(reliabilityScore AS REAL)),
+                    AVG(CAST(initiativeScore AS REAL))
+             FROM founder_reviews
+             WHERE cycleId = ?1
+             GROUP BY revieweeId",
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let mut results: Vec<ReviewResult> = stmt
+        .query_map(params![cycle_id], |row| {
+            let output_avg: f64 = row.get(1)?;
+            let reliability_avg: f64 = row.get(2)?;
+            let initiative_avg: f64 = row.get(3)?;
+            let overall_avg = (output_avg + reliability_avg + initiative_avg) / 3.0;
+            Ok(ReviewResult {
+                founder_id: row.get(0)?,
+                output_avg,
+                reliability_avg,
+                initiative_avg,
+                overall_avg,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Sort ascending by overall_avg (lowest first for accountability)
+    results.sort_by(|a, b| a.overall_avg.partial_cmp(&b.overall_avg).unwrap());
+
+    if results.is_empty() {
+        // No reviews submitted — just close the cycle, nothing to resolve
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle_id],
+        )
+        .map_err(|e| format!("Failed to close review cycle: {e}"))?;
+        return Ok(results);
+    }
+
+    // Identify lowest-ranked founder(s) (Req 2.1)
+    let lowest_score = results[0].overall_avg;
+    let tied: Vec<&ReviewResult> = results
+        .iter()
+        .filter(|r| (r.overall_avg - lowest_score).abs() < 1e-9)
+        .collect();
+
+    if tied.len() == 1 {
+        // Exactly one lowest — auto-issue warning and resolve (Req 2.4)
+        let lowest_founder_id = tied[0].founder_id.clone();
+
+        // Update cycle status to "closed" first (intermediate state)
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle_id],
+        )
+        .map_err(|e| format!("Failed to close review cycle: {e}"))?;
+
+        // Issue accountability warning
+        issue_accountability_warning(conn, &lowest_founder_id, cycle_id, now)?;
+
+        // Check for consecutive warnings → dilution (Req 2.5)
+        check_consecutive_warnings_and_dilute(conn, &lowest_founder_id, cycle_id, now)?;
+
+        // Update cycle status to "resolved"
+        conn.execute(
+            "UPDATE review_cycles SET status = 'resolved', resolvedAt = ?1 WHERE id = ?2",
+            params![now, cycle_id],
+        )
+        .map_err(|e| format!("Failed to resolve review cycle: {e}"))?;
+    } else {
+        // Tie at the lowest score — leave as "closed" for CEO tie-break (Req 2.2)
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle_id],
+        )
+        .map_err(|e| format!("Failed to close review cycle: {e}"))?;
+    }
+
+    Ok(results)
+}
+
+/// Resolve a tie in a closed review cycle. CEO casts a vote for the
+/// lowest-ranked founder. Updates cycle status to "resolved".
+/// (Req 2.2)
+pub fn resolve_tie_inner(
+    conn: &Connection,
+    cycle_id: &str,
+    ceo_user_id: &str,
+    selected_founder_id: &str,
+    now: i64,
+) -> Result<(), String> {
+    // Verify cycle exists and is "closed"
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM review_cycles WHERE id = ?1",
+            params![cycle_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "Review cycle not found".to_string())?;
+
+    if status != "closed" {
+        return Err(format!(
+            "Review cycle is '{}', expected 'closed'",
+            status
+        ));
+    }
+
+    // Verify the CEO user exists
+    let ceo_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM users WHERE id = ?1",
+            params![ceo_user_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    if !ceo_exists {
+        return Err("CEO user not found".into());
+    }
+
+    // Verify the selected founder exists
+    let founder_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM users WHERE id = ?1",
+            params![selected_founder_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    if !founder_exists {
+        return Err("Selected founder not found".into());
+    }
+
+    // Issue accountability warning for the selected founder
+    issue_accountability_warning(conn, selected_founder_id, cycle_id, now)?;
+
+    // Check for consecutive warnings → dilution (Req 2.5)
+    check_consecutive_warnings_and_dilute(conn, selected_founder_id, cycle_id, now)?;
+
+    // Update cycle status to "resolved"
+    conn.execute(
+        "UPDATE review_cycles SET status = 'resolved', resolvedAt = ?1 WHERE id = ?2",
+        params![now, cycle_id],
+    )
+    .map_err(|e| format!("Failed to resolve review cycle: {e}"))?;
+
+    Ok(())
+}
+
+/// Get review history for a founder: all cycles where they were reviewed.
+pub fn get_review_history_inner(
+    conn: &Connection,
+    founder_id: &str,
+) -> Result<Vec<ReviewCycle>, String> {
+    // Return all cycles that have reviews for this founder, ordered by startDate desc
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT rc.id, rc.startDate, rc.endDate, rc.submissionDeadline,
+                    rc.status, rc.resolvedAt, rc.createdAt
+             FROM review_cycles rc
+             INNER JOIN founder_reviews fr ON fr.cycleId = rc.id
+             WHERE fr.revieweeId = ?1
+             ORDER BY rc.startDate DESC",
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let cycles = stmt
+        .query_map(params![founder_id], |row| {
+            Ok(ReviewCycle {
+                id: row.get(0)?,
+                start_date: row.get(1)?,
+                end_date: row.get(2)?,
+                submission_deadline: row.get(3)?,
+                status: row.get(4)?,
+                resolved_at: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(cycles)
+}
+
+/// Get the total accountability warning count for a founder.
+pub fn get_warning_count_inner(
+    conn: &Connection,
+    founder_id: &str,
+) -> Result<i32, String> {
+    let count: i32 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = ?1",
+            params![founder_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
+// FounderReview struct (camelCase for JS interop via serde rename)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FounderReview {
+    pub id: String,
+    #[serde(rename = "cycleId")]
+    pub cycle_id: String,
+    #[serde(rename = "reviewerId")]
+    pub reviewer_id: String,
+    #[serde(rename = "revieweeId")]
+    pub reviewee_id: String,
+    #[serde(rename = "outputScore")]
+    pub output_score: i32,
+    #[serde(rename = "reliabilityScore")]
+    pub reliability_score: i32,
+    #[serde(rename = "initiativeScore")]
+    pub initiative_score: i32,
+    #[serde(rename = "submittedAt")]
+    pub submitted_at: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Review submission core logic (Req 1.3, 1.4, 1.6, 2.7)
+// ---------------------------------------------------------------------------
+
+/// Submit a founder review. Validates:
+/// 1. Cycle exists and is "open"
+/// 2. now < submissionDeadline
+/// 3. reviewerId != revieweeId (no self-review)
+/// 4. No duplicate (cycleId, reviewerId, revieweeId)
+/// 5. All scores in [1, 5]
+pub fn submit_founder_review_inner(
+    conn: &Connection,
+    cycle_id: &str,
+    reviewer_id: &str,
+    reviewee_id: &str,
+    output_score: i32,
+    reliability_score: i32,
+    initiative_score: i32,
+    now: i64,
+) -> Result<FounderReview, String> {
+    // Validate: reviewerId != revieweeId (Req 1.3 — no self-review)
+    if reviewer_id == reviewee_id {
+        return Err("Reviewer and reviewee must be different founders".into());
+    }
+
+    // Validate: all scores in [1, 5] (Req 1.4)
+    for (name, score) in [
+        ("output", output_score),
+        ("reliability", reliability_score),
+        ("initiative", initiative_score),
+    ] {
+        if !(1..=5).contains(&score) {
+            return Err(format!(
+                "Invalid {} score: {}. Must be between 1 and 5",
+                name, score
+            ));
+        }
+    }
+
+    // Validate: cycle exists and is "open"
+    let (status, submission_deadline): (String, i64) = conn
+        .query_row(
+            "SELECT status, submissionDeadline FROM review_cycles WHERE id = ?1",
+            params![cycle_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "Review cycle not found".to_string())?;
+
+    if status != "open" {
+        return Err(format!(
+            "Review cycle is '{}', expected 'open'",
+            status
+        ));
+    }
+
+    // Validate: now < submissionDeadline (Req 1.6)
+    if now >= submission_deadline {
+        return Err("Submission deadline has passed".into());
+    }
+
+    // Validate: no duplicate (cycleId, reviewerId, revieweeId) (Req 1.3)
+    let duplicate_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM founder_reviews WHERE cycleId = ?1 AND reviewerId = ?2 AND revieweeId = ?3",
+            params![cycle_id, reviewer_id, reviewee_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    if duplicate_count > 0 {
+        return Err("A review for this reviewer-reviewee pair already exists in this cycle".into());
+    }
+
+    let review_id = Uuid::new_v4().to_string();
+
+    conn.execute(
+        "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            review_id,
+            cycle_id,
+            reviewer_id,
+            reviewee_id,
+            output_score,
+            reliability_score,
+            initiative_score,
+            now,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert founder review: {e}"))?;
+
+    Ok(FounderReview {
+        id: review_id,
+        cycle_id: cycle_id.to_string(),
+        reviewer_id: reviewer_id.to_string(),
+        reviewee_id: reviewee_id.to_string(),
+        output_score,
+        reliability_score,
+        initiative_score,
+        submitted_at: now,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Git integration commands (Req 11.1, 11.2)
 // ---------------------------------------------------------------------------
 
@@ -1137,6 +1745,373 @@ pub fn get_git_events(
 ) -> Result<Vec<git::GitEventRecord>, String> {
     let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
     git::get_git_events_for_session(&conn, &session_id)
+}
+
+// ---------------------------------------------------------------------------
+// Review cycle Tauri commands (Req 1.1, 1.7, 2.1, 2.6)
+// ---------------------------------------------------------------------------
+
+/// Create a new review cycle starting at the given date.
+#[tauri::command]
+pub fn create_review_cycle(start_date: i64) -> Result<ReviewCycle, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    create_review_cycle_inner(&conn, start_date, now)
+}
+
+/// Close a review cycle: compute average scores and return sorted results.
+#[tauri::command]
+pub fn close_review_cycle(cycle_id: String) -> Result<Vec<ReviewResult>, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    close_review_cycle_inner(&conn, &cycle_id, now)
+}
+
+/// Resolve a tie in a closed review cycle via CEO vote.
+#[tauri::command]
+pub fn resolve_tie(
+    cycle_id: String,
+    ceo_user_id: String,
+    selected_founder_id: String,
+) -> Result<(), String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    resolve_tie_inner(&conn, &cycle_id, &ceo_user_id, &selected_founder_id, now)
+}
+
+/// Get review history for a founder.
+#[tauri::command]
+pub fn get_review_history(founder_id: String) -> Result<Vec<ReviewCycle>, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    get_review_history_inner(&conn, &founder_id)
+}
+
+/// Get the total accountability warning count for a founder.
+#[tauri::command]
+pub fn get_warning_count(founder_id: String) -> Result<i32, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    get_warning_count_inner(&conn, &founder_id)
+}
+
+/// Submit a founder review for a review cycle.
+#[tauri::command]
+pub fn submit_founder_review(
+    cycle_id: String,
+    reviewer_id: String,
+    reviewee_id: String,
+    output_score: i32,
+    reliability_score: i32,
+    initiative_score: i32,
+) -> Result<FounderReview, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    submit_founder_review_inner(
+        &conn,
+        &cycle_id,
+        &reviewer_id,
+        &reviewee_id,
+        output_score,
+        reliability_score,
+        initiative_score,
+        now,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Equity dilution core logic (Req 6.5, 21.4)
+// ---------------------------------------------------------------------------
+
+/// Validate that the cap table sums to 100% within 0.01% tolerance.
+pub fn validate_cap_table_sum(conn: &Connection) -> Result<bool, String> {
+    let total: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(currentStakePct), 0.0) FROM equity_stakes",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    // Within 0.01% of 100 means |total - 100.0| <= 0.01
+    Ok((total - 100.0).abs() <= 0.01)
+}
+
+/// Apply a dilution event: reduce the target founder's equity by dilution_pct,
+/// redistribute proportionally among remaining founders, and validate the cap
+/// table sum afterwards. (Req 6.5, 21.4)
+pub fn apply_dilution_inner(
+    conn: &Connection,
+    founder_id: &str,
+    cycle_id: &str,
+    dilution_pct: f64,
+    now: i64,
+) -> Result<(), String> {
+    if dilution_pct <= 0.0 {
+        return Err("Dilution percentage must be positive".into());
+    }
+
+    // Verify the founder has an equity stake
+    let current_pct: f64 = conn
+        .query_row(
+            "SELECT currentStakePct FROM equity_stakes WHERE founderId = ?1",
+            params![founder_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| format!("No equity stake found for founder {}", founder_id))?;
+
+    if dilution_pct > current_pct {
+        return Err(format!(
+            "Dilution {}% exceeds founder's current stake {}%",
+            dilution_pct, current_pct
+        ));
+    }
+
+    // Delegate to the existing trigger_dilution which handles the actual
+    // stake updates, redistribution, and dilution_events record creation
+    trigger_dilution(conn, founder_id, cycle_id, dilution_pct, now)?;
+
+    // Validate cap table sum after dilution (Req 21.4)
+    let valid = validate_cap_table_sum(conn)?;
+    if !valid {
+        let total: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(currentStakePct), 0.0) FROM equity_stakes",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("DB error: {e}"))?;
+        return Err(format!(
+            "Cap table integrity violation: stakes sum to {:.4}%, expected ~100%",
+            total
+        ));
+    }
+
+    Ok(())
+}
+
+/// Apply equity dilution for a founder. Validates inputs, performs the dilution,
+/// and checks cap table integrity afterwards. (Req 6.5, 21.4)
+#[tauri::command]
+pub fn apply_dilution(
+    founder_id: String,
+    cycle_id: String,
+    dilution_pct: f64,
+) -> Result<(), String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    apply_dilution_inner(&conn, &founder_id, &cycle_id, dilution_pct, now)
+}
+
+// ---------------------------------------------------------------------------
+// Dilution event query (Req 2.5, 6.5)
+// ---------------------------------------------------------------------------
+
+/// DilutionEvent struct for JS interop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DilutionEventRow {
+    pub id: String,
+    #[serde(rename = "founderId")]
+    pub founder_id: String,
+    #[serde(rename = "cycleId")]
+    pub cycle_id: String,
+    #[serde(rename = "dilutionPct")]
+    pub dilution_pct: f64,
+    #[serde(rename = "previousStakePct")]
+    pub previous_stake_pct: f64,
+    #[serde(rename = "newStakePct")]
+    pub new_stake_pct: f64,
+    #[serde(rename = "redistributionDetails")]
+    pub redistribution_details: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+}
+
+/// Get dilution events for a specific review cycle.
+/// Used by the frontend to detect if a dilution was triggered after closing a cycle.
+pub fn get_dilution_events_for_cycle_inner(
+    conn: &Connection,
+    cycle_id: &str,
+) -> Result<Vec<DilutionEventRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, founderId, cycleId, dilutionPct, previousStakePct, newStakePct, redistributionDetails, createdAt
+             FROM dilution_events WHERE cycleId = ?1 ORDER BY createdAt ASC",
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let events = stmt
+        .query_map(params![cycle_id], |row| {
+            Ok(DilutionEventRow {
+                id: row.get(0)?,
+                founder_id: row.get(1)?,
+                cycle_id: row.get(2)?,
+                dilution_pct: row.get(3)?,
+                previous_stake_pct: row.get(4)?,
+                new_stake_pct: row.get(5)?,
+                redistribution_details: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(events)
+}
+
+/// Get dilution events for a specific review cycle.
+#[tauri::command]
+pub fn get_dilution_events_for_cycle(cycle_id: String) -> Result<Vec<DilutionEventRow>, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    get_dilution_events_for_cycle_inner(&conn, &cycle_id)
+}
+
+// ---------------------------------------------------------------------------
+// Startup Health structs and core logic (Req 12.1, 12.5, 14.6)
+// ---------------------------------------------------------------------------
+
+/// Startup health config (local-only, never synced).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartupHealthConfigRow {
+    pub id: String,
+    #[serde(rename = "cashBalance")]
+    pub cash_balance: f64,
+    #[serde(rename = "monthlyExpenses")]
+    pub monthly_expenses: String, // JSON array string e.g. "[5000, 6000, 5500]"
+    #[serde(rename = "plannedMonthlyBudget")]
+    pub planned_monthly_budget: f64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+}
+
+/// A decision record from the decisions table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionRow {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "resolvedAt")]
+    pub resolved_at: Option<i64>,
+}
+
+/// Per-founder weekly hours for founder balance computation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FounderWeeklyHours {
+    #[serde(rename = "founderId")]
+    pub founder_id: String,
+    pub name: String,
+    #[serde(rename = "weeklyHours")]
+    pub weekly_hours: f64,
+}
+
+/// Aggregated startup health data returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartupHealthRawData {
+    pub config: Option<StartupHealthConfigRow>,
+    pub decisions: Vec<DecisionRow>,
+    #[serde(rename = "founderHours")]
+    pub founder_hours: Vec<FounderWeeklyHours>,
+}
+
+/// Core logic: read startup health data from SQLite.
+/// Reads startup_health_config, decisions, and computes per-founder weekly
+/// session hours for the current week. (Req 12.1, 12.5, 14.6)
+pub fn compute_startup_health_inner(
+    conn: &Connection,
+    now: i64,
+) -> Result<StartupHealthRawData, String> {
+    // 1. Read startup_health_config (single row, local-only)
+    let config: Option<StartupHealthConfigRow> = conn
+        .prepare(
+            "SELECT id, cashBalance, monthlyExpenses, plannedMonthlyBudget, updatedAt
+             FROM startup_health_config LIMIT 1",
+        )
+        .map_err(|e| format!("DB error: {e}"))?
+        .query_row([], |row| {
+            Ok(StartupHealthConfigRow {
+                id: row.get(0)?,
+                cash_balance: row.get(1)?,
+                monthly_expenses: row.get(2)?,
+                planned_monthly_budget: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .ok();
+
+    // 2. Read all decisions
+    let decisions: Vec<DecisionRow> = conn
+        .prepare(
+            "SELECT id, title, description, createdAt, resolvedAt
+             FROM decisions ORDER BY createdAt DESC",
+        )
+        .map_err(|e| format!("DB error: {e}"))?
+        .query_map([], |row| {
+            Ok(DecisionRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                created_at: row.get(3)?,
+                resolved_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // 3. Compute per-founder weekly session hours for the current week
+    //    Week starts on Monday 00:00 UTC
+    let secs_per_day: i64 = 86400;
+    // Compute day-of-week: 0=Thu for Unix epoch. Monday = (now/86400 + 4) % 7 gives 0=Mon
+    let days_since_epoch = now / secs_per_day;
+    let day_of_week = ((days_since_epoch + 3) % 7) as i64; // 0=Mon, 6=Sun
+    let week_start = (days_since_epoch - day_of_week) * secs_per_day;
+
+    let founder_hours: Vec<FounderWeeklyHours> = conn
+        .prepare(
+            "SELECT u.id, u.name,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN s.endTime IS NOT NULL THEN
+                                MIN(s.endTime, ?1) - MAX(s.startTime, ?2)
+                            ELSE
+                                ?1 - MAX(s.startTime, ?2)
+                        END
+                    ), 0) / 3600.0 AS hours
+             FROM users u
+             LEFT JOIN sessions s ON s.userId = u.id
+                AND s.startTime < ?1
+                AND (s.endTime IS NULL OR s.endTime > ?2)
+             WHERE LOWER(u.role) LIKE '%founder%' OR LOWER(u.role) LIKE '%ceo%'
+             GROUP BY u.id, u.name
+             ORDER BY u.name ASC",
+        )
+        .map_err(|e| format!("DB error: {e}"))?
+        .query_map(params![now, week_start], |row| {
+            Ok(FounderWeeklyHours {
+                founder_id: row.get(0)?,
+                name: row.get(1)?,
+                weekly_hours: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(StartupHealthRawData {
+        config,
+        decisions,
+        founder_hours,
+    })
+}
+
+/// Compute startup health: reads config, decisions, and founder weekly hours
+/// from SQLite and returns raw data for the TypeScript layer. (Req 12.1, 12.5, 14.6)
+#[tauri::command]
+pub fn compute_startup_health() -> Result<StartupHealthRawData, String> {
+    let conn = db::open_connection().map_err(|e| format!("DB error: {e}"))?;
+    let now = now_unix();
+    compute_startup_health_inner(&conn, now)
 }
 
 // ---------------------------------------------------------------------------
@@ -3257,5 +4232,1414 @@ mod tests {
             )
             .unwrap();
         assert_eq!(last_start, base_time + 10);
+    }
+
+    // -----------------------------------------------------------------------
+    // Review cycle tests (Validates: Requirements 1.1, 1.7, 2.1, 2.6)
+    // -----------------------------------------------------------------------
+
+    /// Helper: insert multiple founder users for review tests.
+    fn insert_founders(conn: &Connection) {
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, name, email, role, createdAt) VALUES ('f1', 'Alice', 'alice@test.com', 'founder', 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, name, email, role, createdAt) VALUES ('f2', 'Bob', 'bob@test.com', 'founder', 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, name, email, role, createdAt) VALUES ('f3', 'Carol', 'carol@test.com', 'ceo', 1000)",
+            [],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_create_review_cycle_sets_correct_dates() {
+        let conn = setup_test_db();
+        let start = 1_700_000_000i64;
+        let now = start;
+
+        let cycle = create_review_cycle_inner(&conn, start, now).unwrap();
+
+        assert_eq!(cycle.start_date, start);
+        assert_eq!(cycle.end_date, start + 14 * 24 * 3600);
+        assert_eq!(cycle.submission_deadline, start + 48 * 3600);
+        assert_eq!(cycle.status, "open");
+        assert!(cycle.resolved_at.is_none());
+        assert_eq!(cycle.created_at, now);
+        assert!(!cycle.id.is_empty());
+
+        // Verify row in DB
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "open");
+    }
+
+    #[test]
+    fn test_close_review_cycle_computes_averages_and_sorts() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // f1 reviews f2: output=4, reliability=3, initiative=5
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f1', 'f2', 4, 3, 5, ?2)",
+            params![cycle.id, start + 100],
+        ).unwrap();
+
+        // f3 reviews f2: output=2, reliability=3, initiative=1
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f3', 'f2', 2, 3, 1, ?2)",
+            params![cycle.id, start + 200],
+        ).unwrap();
+
+        // f2 reviews f1: output=5, reliability=5, initiative=5
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f2', 'f1', 5, 5, 5, ?2)",
+            params![cycle.id, start + 300],
+        ).unwrap();
+
+        // f3 reviews f1: output=5, reliability=5, initiative=5
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r4', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle.id, start + 400],
+        ).unwrap();
+
+        let results = close_review_cycle_inner(&conn, &cycle.id, start + 500).unwrap();
+
+        assert_eq!(results.len(), 2);
+
+        // f2 averages: output=(4+2)/2=3.0, reliability=(3+3)/2=3.0, initiative=(5+1)/2=3.0
+        // overall = (3+3+3)/3 = 3.0
+        // f1 averages: output=5.0, reliability=5.0, initiative=5.0, overall=5.0
+        // Sorted ascending: f2 first (3.0), then f1 (5.0)
+        assert_eq!(results[0].founder_id, "f2");
+        assert!((results[0].output_avg - 3.0).abs() < 0.001);
+        assert!((results[0].reliability_avg - 3.0).abs() < 0.001);
+        assert!((results[0].initiative_avg - 3.0).abs() < 0.001);
+        assert!((results[0].overall_avg - 3.0).abs() < 0.001);
+
+        assert_eq!(results[1].founder_id, "f1");
+        assert!((results[1].overall_avg - 5.0).abs() < 0.001);
+
+        // Verify cycle status is now "resolved" (single lowest → auto-resolved)
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "resolved");
+
+        // Verify accountability warning was issued for f2 (lowest-ranked)
+        let warning_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2' AND cycleId = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(warning_count, 1);
+    }
+
+    #[test]
+    fn test_close_review_cycle_rejects_non_open() {
+        let conn = setup_test_db();
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Close it first
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle.id],
+        ).unwrap();
+
+        // Trying to close again should fail
+        let result = close_review_cycle_inner(&conn, &cycle.id, start + 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 'open'"));
+    }
+
+    #[test]
+    fn test_resolve_tie_issues_warning_and_resolves_cycle() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Close the cycle manually
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle.id],
+        ).unwrap();
+
+        // CEO (f3) resolves tie by selecting f2
+        resolve_tie_inner(&conn, &cycle.id, "f3", "f2", start + 1000).unwrap();
+
+        // Verify warning was created
+        let warning_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2' AND cycleId = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(warning_count, 1);
+
+        // Verify cycle is resolved
+        let (db_status, db_resolved): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT status, resolvedAt FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(db_status, "resolved");
+        assert_eq!(db_resolved, Some(start + 1000));
+    }
+
+    #[test]
+    fn test_resolve_tie_rejects_non_closed_cycle() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Cycle is still "open" — resolve should fail
+        let result = resolve_tie_inner(&conn, &cycle.id, "f3", "f2", start + 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 'closed'"));
+    }
+
+    #[test]
+    fn test_resolve_tie_rejects_nonexistent_users() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle.id],
+        ).unwrap();
+
+        // Nonexistent CEO
+        let result = resolve_tie_inner(&conn, &cycle.id, "nonexistent", "f2", start + 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("CEO user not found"));
+
+        // Nonexistent founder
+        let result = resolve_tie_inner(&conn, &cycle.id, "f3", "nonexistent", start + 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Selected founder not found"));
+    }
+
+    #[test]
+    fn test_get_review_history_returns_cycles_for_founder() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        // Create two cycles
+        let cycle1 = create_review_cycle_inner(&conn, start, start).unwrap();
+        let cycle2 = create_review_cycle_inner(&conn, start + 14 * 86400, start + 14 * 86400).unwrap();
+
+        // Add reviews for f1 in both cycles
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f2', 'f1', 4, 4, 4, ?2)",
+            params![cycle1.id, start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f2', 'f1', 3, 3, 3, ?2)",
+            params![cycle2.id, start + 14 * 86400 + 100],
+        ).unwrap();
+
+        // Add a review for f2 in cycle1 only
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f1', 'f2', 3, 3, 3, ?2)",
+            params![cycle1.id, start + 200],
+        ).unwrap();
+
+        // f1 should have 2 cycles in history
+        let history = get_review_history_inner(&conn, "f1").unwrap();
+        assert_eq!(history.len(), 2);
+        // Ordered by startDate DESC
+        assert_eq!(history[0].id, cycle2.id);
+        assert_eq!(history[1].id, cycle1.id);
+
+        // f2 should have 1 cycle
+        let history = get_review_history_inner(&conn, "f2").unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, cycle1.id);
+
+        // f3 has no reviews
+        let history = get_review_history_inner(&conn, "f3").unwrap();
+        assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_get_warning_count_returns_correct_count() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        // No warnings initially
+        assert_eq!(get_warning_count_inner(&conn, "f1").unwrap(), 0);
+
+        // Create cycles and warnings
+        let cycle1 = create_review_cycle_inner(&conn, start, start).unwrap();
+        let cycle2 = create_review_cycle_inner(&conn, start + 14 * 86400, start + 14 * 86400).unwrap();
+
+        conn.execute(
+            "INSERT INTO accountability_warnings (id, founderId, cycleId, issuedAt, acknowledged)
+             VALUES ('w1', 'f1', ?1, ?2, 0)",
+            params![cycle1.id, start + 1000],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO accountability_warnings (id, founderId, cycleId, issuedAt, acknowledged)
+             VALUES ('w2', 'f1', ?1, ?2, 0)",
+            params![cycle2.id, start + 14 * 86400 + 1000],
+        ).unwrap();
+
+        assert_eq!(get_warning_count_inner(&conn, "f1").unwrap(), 2);
+        assert_eq!(get_warning_count_inner(&conn, "f2").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_review_cycle_serialization_camel_case() {
+        let cycle = ReviewCycle {
+            id: "c1".into(),
+            start_date: 1000,
+            end_date: 2000,
+            submission_deadline: 1500,
+            status: "open".into(),
+            resolved_at: None,
+            created_at: 1000,
+        };
+        let json = serde_json::to_string(&cycle).unwrap();
+        assert!(json.contains("\"startDate\""));
+        assert!(json.contains("\"endDate\""));
+        assert!(json.contains("\"submissionDeadline\""));
+        assert!(json.contains("\"resolvedAt\""));
+        assert!(json.contains("\"createdAt\""));
+    }
+
+    #[test]
+    fn test_review_result_serialization_camel_case() {
+        let result = ReviewResult {
+            founder_id: "f1".into(),
+            output_avg: 4.0,
+            reliability_avg: 3.5,
+            initiative_avg: 4.5,
+            overall_avg: 4.0,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"founderId\""));
+        assert!(json.contains("\"outputAvg\""));
+        assert!(json.contains("\"reliabilityAvg\""));
+        assert!(json.contains("\"initiativeAvg\""));
+        assert!(json.contains("\"overallAvg\""));
+    }
+
+    #[test]
+    fn test_close_review_cycle_with_no_reviews_returns_empty() {
+        let conn = setup_test_db();
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+        let results = close_review_cycle_inner(&conn, &cycle.id, start + 500).unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // submit_founder_review_inner tests (Validates: Req 1.3, 1.4, 1.6, 2.7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_submit_review_success() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Submit within deadline (start + 48h)
+        let now = start + 1000;
+        let review = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 4, 3, 5, now,
+        )
+        .unwrap();
+
+        assert_eq!(review.cycle_id, cycle.id);
+        assert_eq!(review.reviewer_id, "f1");
+        assert_eq!(review.reviewee_id, "f2");
+        assert_eq!(review.output_score, 4);
+        assert_eq!(review.reliability_score, 3);
+        assert_eq!(review.initiative_score, 5);
+        assert_eq!(review.submitted_at, now);
+        assert!(!review.id.is_empty());
+
+        // Verify row in DB
+        let db_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM founder_reviews WHERE id = ?1",
+                params![review.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_count, 1);
+    }
+
+    #[test]
+    fn test_submit_review_rejects_self_review() {
+        // Validates: Req 1.3 — reviewerId != revieweeId
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f1", 3, 3, 3, start + 100,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("different founders"));
+    }
+
+    #[test]
+    fn test_submit_review_rejects_duplicate() {
+        // Validates: Req 1.3 — unique (cycleId, reviewerId, revieweeId)
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // First submission succeeds
+        submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 4, 4, 4, start + 100,
+        )
+        .unwrap();
+
+        // Duplicate should fail
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 3, 3, start + 200,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_submit_review_rejects_scores_out_of_range() {
+        // Validates: Req 1.4 — scores must be in [1, 5]
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+        let now = start + 100;
+
+        // Score 0 (below range)
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 0, 3, 3, now,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("output"));
+
+        // Score 6 (above range)
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 6, 3, now,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("reliability"));
+
+        // Negative score
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 3, -1, now,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("initiative"));
+    }
+
+    #[test]
+    fn test_submit_review_accepts_boundary_scores() {
+        // Validates: Req 1.4 — scores 1 and 5 are valid boundaries
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // All 1s (minimum)
+        let review = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 1, 1, 1, start + 100,
+        )
+        .unwrap();
+        assert_eq!(review.output_score, 1);
+
+        // All 5s (maximum)
+        let review = submit_founder_review_inner(
+            &conn, &cycle.id, "f2", "f1", 5, 5, 5, start + 200,
+        )
+        .unwrap();
+        assert_eq!(review.output_score, 5);
+    }
+
+    #[test]
+    fn test_submit_review_rejects_past_deadline() {
+        // Validates: Req 1.6 — submission only before deadline
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Exactly at deadline (now == submissionDeadline)
+        let at_deadline = cycle.submission_deadline;
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 3, 3, at_deadline,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("deadline has passed"));
+
+        // After deadline
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 3, 3, at_deadline + 1,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("deadline has passed"));
+    }
+
+    #[test]
+    fn test_submit_review_rejects_non_open_cycle() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // Close the cycle
+        conn.execute(
+            "UPDATE review_cycles SET status = 'closed' WHERE id = ?1",
+            params![cycle.id],
+        )
+        .unwrap();
+
+        let result = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 3, 3, 3, start + 100,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 'open'"));
+    }
+
+    #[test]
+    fn test_submit_review_rejects_nonexistent_cycle() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+
+        let result = submit_founder_review_inner(
+            &conn, "nonexistent", "f1", "f2", 3, 3, 3, 1_700_000_000,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn test_submit_review_allows_different_reviewee_same_reviewer() {
+        // f1 can review both f2 and f3 in the same cycle
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f2", 4, 4, 4, start + 100,
+        )
+        .unwrap();
+
+        let review2 = submit_founder_review_inner(
+            &conn, &cycle.id, "f1", "f3", 3, 3, 3, start + 200,
+        )
+        .unwrap();
+        assert_eq!(review2.reviewee_id, "f3");
+
+        // Verify 2 reviews exist for f1 as reviewer
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM founder_reviews WHERE cycleId = ?1 AND reviewerId = 'f1'",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_submit_review_serialization_camel_case() {
+        let review = FounderReview {
+            id: "r1".into(),
+            cycle_id: "c1".into(),
+            reviewer_id: "f1".into(),
+            reviewee_id: "f2".into(),
+            output_score: 4,
+            reliability_score: 3,
+            initiative_score: 5,
+            submitted_at: 1000,
+        };
+        let json = serde_json::to_string(&review).unwrap();
+        assert!(json.contains("\"cycleId\""));
+        assert!(json.contains("\"reviewerId\""));
+        assert!(json.contains("\"revieweeId\""));
+        assert!(json.contains("\"outputScore\""));
+        assert!(json.contains("\"reliabilityScore\""));
+        assert!(json.contains("\"initiativeScore\""));
+        assert!(json.contains("\"submittedAt\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Lowest-ranked detection and accountability warning tests (Req 2.1–2.5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_close_review_cycle_auto_warns_single_lowest() {
+        // When exactly one founder is lowest-ranked, close_review_cycle should
+        // auto-issue a warning and resolve the cycle.
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // f1 reviews f2: low scores (output=1, reliability=1, initiative=1)
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle.id, start + 100],
+        ).unwrap();
+
+        // f1 reviews f3: high scores
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f1', 'f3', 5, 5, 5, ?2)",
+            params![cycle.id, start + 200],
+        ).unwrap();
+
+        // f3 reviews f2: low scores
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f3', 'f2', 2, 2, 2, ?2)",
+            params![cycle.id, start + 300],
+        ).unwrap();
+
+        // f3 reviews f1: high scores
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r4', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle.id, start + 400],
+        ).unwrap();
+
+        let results = close_review_cycle_inner(&conn, &cycle.id, start + 500).unwrap();
+
+        // f2 is clearly lowest (avg ~1.5), f1 and f3 are higher
+        assert_eq!(results[0].founder_id, "f2");
+
+        // Verify warning was created for f2
+        let warning_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2' AND cycleId = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(warning_count, 1);
+
+        // Verify cycle is resolved (not just closed)
+        let (db_status, db_resolved): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT status, resolvedAt FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(db_status, "resolved");
+        assert_eq!(db_resolved, Some(start + 500));
+    }
+
+    #[test]
+    fn test_close_review_cycle_tie_leaves_closed_for_ceo() {
+        // When two founders tie at the lowest score, cycle should stay "closed"
+        // (not "resolved") so CEO can break the tie via resolve_tie.
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // f3 reviews f1: scores (2, 2, 2) → overall 2.0
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f3', 'f1', 2, 2, 2, ?2)",
+            params![cycle.id, start + 100],
+        ).unwrap();
+
+        // f3 reviews f2: scores (2, 2, 2) → overall 2.0 (tie with f1)
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f3', 'f2', 2, 2, 2, ?2)",
+            params![cycle.id, start + 200],
+        ).unwrap();
+
+        let results = close_review_cycle_inner(&conn, &cycle.id, start + 500).unwrap();
+
+        // Both should have the same overall_avg
+        assert!((results[0].overall_avg - results[1].overall_avg).abs() < 1e-9);
+
+        // No warnings should be issued (tie → CEO must break it)
+        let total_warnings: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE cycleId = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total_warnings, 0);
+
+        // Cycle should be "closed" (not "resolved")
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "closed");
+    }
+
+    #[test]
+    fn test_consecutive_warnings_trigger_dilution() {
+        // When a founder gets warnings in two consecutive cycles, a dilution
+        // event should be triggered. (Req 2.5)
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        // Set up equity stakes for all founders
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es1', 'f1', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es2', 'f2', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es3', 'f3', 33.34, 33.34, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+
+        // Cycle 1: f2 gets lowest score → warning
+        let cycle1 = create_review_cycle_inner(&conn, start, start).unwrap();
+
+        // f1 reviews f2: low, f3: high
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f1', 'f3', 5, 5, 5, ?2)",
+            params![cycle1.id, start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f3', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 300],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r4', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle1.id, start + 400],
+        ).unwrap();
+
+        close_review_cycle_inner(&conn, &cycle1.id, start + 500).unwrap();
+
+        // Verify f2 got a warning in cycle 1
+        let w1_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2' AND cycleId = ?1",
+                params![cycle1.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(w1_count, 1);
+
+        // No dilution yet (first warning)
+        let dilution_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dilution_events WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dilution_count, 0);
+
+        // Cycle 2: f2 gets lowest again → second consecutive warning → dilution
+        let cycle2_start = start + 14 * 86400;
+        let cycle2 = create_review_cycle_inner(&conn, cycle2_start, cycle2_start).unwrap();
+
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r5', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle2.id, cycle2_start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r6', ?1, 'f1', 'f3', 5, 5, 5, ?2)",
+            params![cycle2.id, cycle2_start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r7', ?1, 'f3', 'f2', 1, 1, 1, ?2)",
+            params![cycle2.id, cycle2_start + 300],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r8', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle2.id, cycle2_start + 400],
+        ).unwrap();
+
+        close_review_cycle_inner(&conn, &cycle2.id, cycle2_start + 500).unwrap();
+
+        // Verify f2 got a warning in cycle 2
+        let w2_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2' AND cycleId = ?1",
+                params![cycle2.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(w2_count, 1);
+
+        // Verify dilution event was triggered
+        let dilution_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dilution_events WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dilution_count, 1);
+
+        // Verify f2's equity was reduced by 1%
+        let f2_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((f2_stake - 32.33).abs() < 0.01);
+
+        // Verify the 1% was redistributed to f1 and f3
+        let f1_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let f3_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f3'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Total should still be ~100%
+        let total = f1_stake + f2_stake + f3_stake;
+        assert!((total - 100.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_no_dilution_for_non_consecutive_warnings() {
+        // If a founder gets a warning in cycle 1 but NOT in cycle 2,
+        // then gets a warning in cycle 3, no dilution should occur.
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        // Set up equity stakes
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es1', 'f1', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es2', 'f2', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es3', 'f3', 33.34, 33.34, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+
+        // Cycle 1: f2 gets lowest → warning
+        let cycle1 = create_review_cycle_inner(&conn, start, start).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f3', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle1.id, start + 300],
+        ).unwrap();
+        close_review_cycle_inner(&conn, &cycle1.id, start + 500).unwrap();
+
+        // Cycle 2: f1 gets lowest (not f2) → f2 breaks the streak
+        let cycle2_start = start + 14 * 86400;
+        let cycle2 = create_review_cycle_inner(&conn, cycle2_start, cycle2_start).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r4', ?1, 'f2', 'f1', 1, 1, 1, ?2)",
+            params![cycle2.id, cycle2_start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r5', ?1, 'f3', 'f1', 1, 1, 1, ?2)",
+            params![cycle2.id, cycle2_start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r6', ?1, 'f3', 'f2', 5, 5, 5, ?2)",
+            params![cycle2.id, cycle2_start + 300],
+        ).unwrap();
+        close_review_cycle_inner(&conn, &cycle2.id, cycle2_start + 500).unwrap();
+
+        // Cycle 3: f2 gets lowest again → warning but NOT consecutive (gap in cycle 2)
+        let cycle3_start = start + 28 * 86400;
+        let cycle3 = create_review_cycle_inner(&conn, cycle3_start, cycle3_start).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r7', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle3.id, cycle3_start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r8', ?1, 'f3', 'f2', 1, 1, 1, ?2)",
+            params![cycle3.id, cycle3_start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r9', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle3.id, cycle3_start + 300],
+        ).unwrap();
+        close_review_cycle_inner(&conn, &cycle3.id, cycle3_start + 500).unwrap();
+
+        // f2 should have warnings in cycle 1 and cycle 3, but NOT consecutive
+        let total_warnings: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total_warnings, 2);
+
+        // No dilution should have occurred
+        let dilution_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dilution_events WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dilution_count, 0);
+    }
+
+    #[test]
+    fn test_resolve_tie_consecutive_warnings_trigger_dilution() {
+        // When resolve_tie issues a warning and the founder had a warning in the
+        // previous cycle, dilution should be triggered.
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        let start = 1_700_000_000i64;
+
+        // Set up equity stakes
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es1', 'f1', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es2', 'f2', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es3', 'f3', 33.34, 33.34, 1000, 2000, 3000, 48, ?1)",
+            params![start],
+        ).unwrap();
+
+        // Cycle 1: f2 gets lowest → auto-warning via close_review_cycle
+        let cycle1 = create_review_cycle_inner(&conn, start, start).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r1', ?1, 'f1', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r2', ?1, 'f3', 'f2', 1, 1, 1, ?2)",
+            params![cycle1.id, start + 200],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r3', ?1, 'f3', 'f1', 5, 5, 5, ?2)",
+            params![cycle1.id, start + 300],
+        ).unwrap();
+        close_review_cycle_inner(&conn, &cycle1.id, start + 500).unwrap();
+
+        // Cycle 2: tie at lowest → CEO resolves by picking f2 again
+        let cycle2_start = start + 14 * 86400;
+        let cycle2 = create_review_cycle_inner(&conn, cycle2_start, cycle2_start).unwrap();
+        // Create a tie: f1 and f2 both get score 2.0
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r4', ?1, 'f3', 'f1', 2, 2, 2, ?2)",
+            params![cycle2.id, cycle2_start + 100],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO founder_reviews (id, cycleId, reviewerId, revieweeId, outputScore, reliabilityScore, initiativeScore, submittedAt)
+             VALUES ('r5', ?1, 'f3', 'f2', 2, 2, 2, ?2)",
+            params![cycle2.id, cycle2_start + 200],
+        ).unwrap();
+
+        // Close cycle (should leave as "closed" due to tie)
+        close_review_cycle_inner(&conn, &cycle2.id, cycle2_start + 500).unwrap();
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM review_cycles WHERE id = ?1",
+                params![cycle2.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "closed");
+
+        // CEO resolves tie by picking f2
+        resolve_tie_inner(&conn, &cycle2.id, "f3", "f2", cycle2_start + 1000).unwrap();
+
+        // Verify dilution was triggered (consecutive warnings for f2)
+        let dilution_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dilution_events WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dilution_count, 1);
+
+        // Verify f2's equity was reduced
+        let f2_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((f2_stake - 32.33).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_close_review_cycle_no_reviews_no_warning() {
+        // When no reviews are submitted, no warning should be issued.
+        let conn = setup_test_db();
+        let start = 1_700_000_000i64;
+
+        let cycle = create_review_cycle_inner(&conn, start, start).unwrap();
+        let results = close_review_cycle_inner(&conn, &cycle.id, start + 500).unwrap();
+
+        assert!(results.is_empty());
+
+        // No warnings
+        let total_warnings: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accountability_warnings WHERE cycleId = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total_warnings, 0);
+
+        // Cycle should be "closed" (not resolved — nothing to resolve)
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM review_cycles WHERE id = ?1",
+                params![cycle.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "closed");
+    }
+
+    #[test]
+    fn test_accountability_warning_serialization_camel_case() {
+        let warning = AccountabilityWarning {
+            id: "w1".into(),
+            founder_id: "f1".into(),
+            cycle_id: "c1".into(),
+            issued_at: 1000,
+            acknowledged: false,
+        };
+        let json = serde_json::to_string(&warning).unwrap();
+        assert!(json.contains("\"founderId\""));
+        assert!(json.contains("\"cycleId\""));
+        assert!(json.contains("\"issuedAt\""));
+        assert!(json.contains("\"acknowledged\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_dilution_inner and validate_cap_table_sum tests (Req 6.5, 21.4)
+    // -----------------------------------------------------------------------
+
+    /// Helper: insert equity stakes for 3 founders summing to 100%.
+    fn insert_equity_stakes(conn: &Connection, now: i64) {
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es1', 'f1', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es2', 'f2', 33.33, 33.33, 1000, 2000, 3000, 48, ?1)",
+            params![now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es3', 'f3', 33.34, 33.34, 1000, 2000, 3000, 48, ?1)",
+            params![now],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_validate_cap_table_sum_valid() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        insert_equity_stakes(&conn, 1000);
+
+        let valid = validate_cap_table_sum(&conn).unwrap();
+        assert!(valid, "Cap table summing to 100% should be valid");
+    }
+
+    #[test]
+    fn test_validate_cap_table_sum_invalid() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        // Insert stakes that don't sum to 100%
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es1', 'f1', 50.0, 50.0, 1000, 2000, 3000, 48, 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO equity_stakes (id, founderId, initialStakePct, currentStakePct, vestingStartDate, cliffDate, vestingEndDate, vestingScheduleMonths, updatedAt)
+             VALUES ('es2', 'f2', 30.0, 30.0, 1000, 2000, 3000, 48, 1000)",
+            [],
+        ).unwrap();
+        // Sum = 80%, not 100%
+
+        let valid = validate_cap_table_sum(&conn).unwrap();
+        assert!(!valid, "Cap table summing to 80% should be invalid");
+    }
+
+    #[test]
+    fn test_apply_dilution_inner_reduces_stake_and_redistributes() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        insert_equity_stakes(&conn, 1000);
+
+        // Create a review cycle for the dilution event reference
+        let cycle = create_review_cycle_inner(&conn, 1_700_000_000, 1_700_000_000).unwrap();
+
+        // Apply 1% dilution to f2
+        apply_dilution_inner(&conn, "f2", &cycle.id, 1.0, 1_700_001_000).unwrap();
+
+        // f2's stake should be reduced by 1%
+        let f2_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((f2_stake - 32.33).abs() < 0.01, "f2 stake should be ~32.33%, got {}", f2_stake);
+
+        // f1 and f3 should have increased proportionally
+        let f1_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let f3_stake: f64 = conn
+            .query_row(
+                "SELECT currentStakePct FROM equity_stakes WHERE founderId = 'f3'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // Cap table should still sum to ~100%
+        let total = f1_stake + f2_stake + f3_stake;
+        assert!((total - 100.0).abs() <= 0.01, "Cap table should sum to ~100%, got {}", total);
+
+        // A dilution_events record should exist
+        let dilution_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dilution_events WHERE founderId = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dilution_count, 1);
+    }
+
+    #[test]
+    fn test_apply_dilution_inner_rejects_zero_pct() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        insert_equity_stakes(&conn, 1000);
+
+        let cycle = create_review_cycle_inner(&conn, 1_700_000_000, 1_700_000_000).unwrap();
+
+        let result = apply_dilution_inner(&conn, "f1", &cycle.id, 0.0, 1_700_001_000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be positive"));
+    }
+
+    #[test]
+    fn test_apply_dilution_inner_rejects_excessive_pct() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        insert_equity_stakes(&conn, 1000);
+
+        let cycle = create_review_cycle_inner(&conn, 1_700_000_000, 1_700_000_000).unwrap();
+
+        // f1 has 33.33%, trying to dilute by 50% should fail
+        let result = apply_dilution_inner(&conn, "f1", &cycle.id, 50.0, 1_700_001_000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn test_apply_dilution_inner_rejects_missing_founder() {
+        let conn = setup_test_db();
+        insert_founders(&conn);
+        insert_equity_stakes(&conn, 1000);
+
+        let cycle = create_review_cycle_inner(&conn, 1_700_000_000, 1_700_000_000).unwrap();
+
+        let result = apply_dilution_inner(&conn, "nonexistent", &cycle.id, 1.0, 1_700_001_000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No equity stake found"));
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_startup_health_inner tests (Validates: Req 12.1, 12.5, 14.6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_startup_health_returns_empty_when_no_data() {
+        let conn = setup_test_db();
+        let now = 1_700_000_000i64;
+
+        let result = compute_startup_health_inner(&conn, now).unwrap();
+
+        assert!(result.config.is_none());
+        assert!(result.decisions.is_empty());
+        // No founders with founder/ceo role → empty
+        assert!(result.founder_hours.is_empty());
+    }
+
+    #[test]
+    fn test_compute_startup_health_reads_config() {
+        let conn = setup_test_db();
+        let now = 1_700_000_000i64;
+
+        conn.execute(
+            "INSERT INTO startup_health_config (id, cashBalance, monthlyExpenses, plannedMonthlyBudget, updatedAt)
+             VALUES ('cfg1', 50000.0, '[5000, 6000, 5500]', 5500.0, ?1)",
+            params![now],
+        ).unwrap();
+
+        let result = compute_startup_health_inner(&conn, now).unwrap();
+
+        let config = result.config.unwrap();
+        assert_eq!(config.id, "cfg1");
+        assert!((config.cash_balance - 50000.0).abs() < 0.01);
+        assert_eq!(config.monthly_expenses, "[5000, 6000, 5500]");
+        assert!((config.planned_monthly_budget - 5500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_startup_health_reads_decisions() {
+        let conn = setup_test_db();
+        let now = 1_700_000_000i64;
+
+        conn.execute(
+            "INSERT INTO decisions (id, title, description, createdAt, resolvedAt)
+             VALUES ('d1', 'Hire engineer', 'Need backend dev', ?1, ?2)",
+            params![now - 86400, now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO decisions (id, title, description, createdAt)
+             VALUES ('d2', 'Office lease', 'Renew or move', ?1)",
+            params![now - 3600],
+        ).unwrap();
+
+        let result = compute_startup_health_inner(&conn, now).unwrap();
+
+        assert_eq!(result.decisions.len(), 2);
+        // Ordered by createdAt DESC
+        assert_eq!(result.decisions[0].id, "d2");
+        assert_eq!(result.decisions[1].id, "d1");
+        assert!(result.decisions[1].resolved_at.is_some());
+        assert!(result.decisions[0].resolved_at.is_none());
+    }
+
+    #[test]
+    fn test_compute_startup_health_computes_founder_hours() {
+        let conn = setup_test_db();
+        // u1 is already created but has no role set. Update to founder.
+        conn.execute(
+            "UPDATE users SET role = 'founder' WHERE id = 'u1'",
+            [],
+        ).unwrap();
+        // Add another founder
+        conn.execute(
+            "INSERT INTO users (id, name, email, role, createdAt) VALUES ('u2', 'Alice', 'alice@test.com', 'ceo', 1000)",
+            [],
+        ).unwrap();
+
+        // Set now to a known Monday at noon UTC: 2023-11-13 12:00:00 UTC = 1699876800
+        // Actually, let's use a simpler approach: pick a timestamp and compute week start
+        let now = 1_700_000_000i64; // 2023-11-14 22:13:20 UTC (Tuesday)
+
+        // Insert a session for u1 that started 2 hours ago and ended 1 hour ago
+        conn.execute(
+            "INSERT INTO sessions (id, userId, startTime, endTime, startType, startVerified, createdAt)
+             VALUES ('s1', 'u1', ?1, ?2, 'manual', 1, ?1)",
+            params![now - 7200, now - 3600],
+        ).unwrap();
+
+        // Insert a session for u2 that started 4 hours ago and is still active
+        conn.execute(
+            "INSERT INTO sessions (id, userId, startTime, startType, startVerified, createdAt)
+             VALUES ('s2', 'u2', ?1, 'manual', 1, ?1)",
+            params![now - 14400],
+        ).unwrap();
+
+        let result = compute_startup_health_inner(&conn, now).unwrap();
+
+        assert_eq!(result.founder_hours.len(), 2);
+
+        // Find u1 and u2 in results
+        let u1_hours = result.founder_hours.iter().find(|f| f.founder_id == "u1").unwrap();
+        let u2_hours = result.founder_hours.iter().find(|f| f.founder_id == "u2").unwrap();
+
+        // u1: 1 hour session (3600 seconds / 3600 = 1.0 hour)
+        assert!((u1_hours.weekly_hours - 1.0).abs() < 0.1, "u1 should have ~1.0 hours, got {}", u1_hours.weekly_hours);
+
+        // u2: 4 hours active session (14400 seconds / 3600 = 4.0 hours)
+        assert!((u2_hours.weekly_hours - 4.0).abs() < 0.1, "u2 should have ~4.0 hours, got {}", u2_hours.weekly_hours);
+    }
+
+    #[test]
+    fn test_compute_startup_health_excludes_non_founders() {
+        let conn = setup_test_db();
+        // u1 has no role (regular team member)
+        // Add a founder
+        conn.execute(
+            "INSERT INTO users (id, name, email, role, createdAt) VALUES ('u2', 'Founder', 'f@test.com', 'founder', 1000)",
+            [],
+        ).unwrap();
+
+        let now = 1_700_000_000i64;
+
+        let result = compute_startup_health_inner(&conn, now).unwrap();
+
+        // Only u2 (founder) should appear, not u1 (no role)
+        assert_eq!(result.founder_hours.len(), 1);
+        assert_eq!(result.founder_hours[0].founder_id, "u2");
+    }
+
+    #[test]
+    fn test_compute_startup_health_serialization_camel_case() {
+        let data = StartupHealthRawData {
+            config: Some(StartupHealthConfigRow {
+                id: "cfg1".into(),
+                cash_balance: 50000.0,
+                monthly_expenses: "[5000]".into(),
+                planned_monthly_budget: 5000.0,
+                updated_at: 1000,
+            }),
+            decisions: vec![DecisionRow {
+                id: "d1".into(),
+                title: "Test".into(),
+                description: "Desc".into(),
+                created_at: 1000,
+                resolved_at: None,
+            }],
+            founder_hours: vec![FounderWeeklyHours {
+                founder_id: "f1".into(),
+                name: "Alice".into(),
+                weekly_hours: 40.0,
+            }],
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains("\"cashBalance\""));
+        assert!(json.contains("\"monthlyExpenses\""));
+        assert!(json.contains("\"plannedMonthlyBudget\""));
+        assert!(json.contains("\"updatedAt\""));
+        assert!(json.contains("\"createdAt\""));
+        assert!(json.contains("\"resolvedAt\""));
+        assert!(json.contains("\"founderId\""));
+        assert!(json.contains("\"weeklyHours\""));
+        assert!(json.contains("\"founderHours\""));
     }
 }

@@ -239,39 +239,6 @@ CREATE TABLE IF NOT EXISTS milestone_tasks (
     PRIMARY KEY (milestoneId, taskId)
 );
 
--- Standup Responses
-CREATE TABLE IF NOT EXISTS standup_responses (
-    id TEXT PRIMARY KEY,
-    userId TEXT NOT NULL REFERENCES users(id),
-    date TEXT NOT NULL,
-    response TEXT NOT NULL,
-    createdAt INTEGER NOT NULL,
-    UNIQUE(userId, date)
-);
-CREATE INDEX IF NOT EXISTS idx_standup_date ON standup_responses(date);
-
--- Mood Checks (local-only, never synced)
-CREATE TABLE IF NOT EXISTS mood_checks (
-    id TEXT PRIMARY KEY,
-    userId TEXT NOT NULL REFERENCES users(id),
-    sessionId TEXT NOT NULL REFERENCES sessions(id),
-    energy INTEGER NOT NULL CHECK(energy >= 1 AND energy <= 5),
-    moodTag TEXT,
-    createdAt INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_mood_checks_user ON mood_checks(userId, createdAt);
-
--- Meetings
-CREATE TABLE IF NOT EXISTS meetings (
-    id TEXT PRIMARY KEY,
-    breakId TEXT NOT NULL REFERENCES breaks(id),
-    sessionId TEXT NOT NULL REFERENCES sessions(id),
-    title TEXT NOT NULL,
-    attendees TEXT,
-    createdAt INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_meetings_session ON meetings(sessionId);
-
 -- Daily Reports
 CREATE TABLE IF NOT EXISTS daily_reports (
     id TEXT PRIMARY KEY,
@@ -284,15 +251,6 @@ CREATE TABLE IF NOT EXISTS daily_reports (
 CREATE INDEX IF NOT EXISTS idx_daily_reports_date ON daily_reports(date);
 CREATE INDEX IF NOT EXISTS idx_daily_reports_user ON daily_reports(userId, date);
 
--- Morning Digests
-CREATE TABLE IF NOT EXISTS morning_digests (
-    id TEXT PRIMARY KEY,
-    date TEXT NOT NULL UNIQUE,
-    digestJson TEXT NOT NULL,
-    viewedBy TEXT NOT NULL DEFAULT '[]',
-    createdAt INTEGER NOT NULL
-);
-
 -- Focus Score History (local-only, never synced)
 CREATE TABLE IF NOT EXISTS focus_score_history (
     id TEXT PRIMARY KEY,
@@ -303,12 +261,112 @@ CREATE TABLE IF NOT EXISTS focus_score_history (
     UNIQUE(userId, date)
 );
 
--- Indexes
+-- v1 Indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_user_start ON sessions(userId, startTime);
 CREATE INDEX IF NOT EXISTS idx_session_tasks_session ON session_tasks(sessionId);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(projectId);
 CREATE INDEX IF NOT EXISTS idx_git_events_session ON git_events(sessionId);
 CREATE INDEX IF NOT EXISTS idx_breaks_session ON breaks(sessionId);
+
+-- ============================================================
+-- v3 Founder Governance
+-- ============================================================
+
+-- Drop legacy tables
+DROP TABLE IF EXISTS mood_checks;
+DROP TABLE IF EXISTS meetings;
+DROP TABLE IF EXISTS standup_responses;
+DROP TABLE IF EXISTS morning_digests;
+
+-- Review Cycles
+CREATE TABLE IF NOT EXISTS review_cycles (
+    id TEXT PRIMARY KEY,
+    startDate INTEGER NOT NULL,
+    endDate INTEGER NOT NULL,
+    submissionDeadline INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open', 'closed', 'resolved')),
+    resolvedAt INTEGER,
+    createdAt INTEGER NOT NULL,
+    CHECK(endDate > startDate),
+    CHECK(submissionDeadline > startDate),
+    CHECK(submissionDeadline <= endDate)
+);
+CREATE INDEX IF NOT EXISTS idx_review_cycles_status ON review_cycles(status);
+
+-- Founder Reviews
+CREATE TABLE IF NOT EXISTS founder_reviews (
+    id TEXT PRIMARY KEY,
+    cycleId TEXT NOT NULL REFERENCES review_cycles(id),
+    reviewerId TEXT NOT NULL REFERENCES users(id),
+    revieweeId TEXT NOT NULL REFERENCES users(id),
+    outputScore INTEGER NOT NULL CHECK(outputScore >= 1 AND outputScore <= 5),
+    reliabilityScore INTEGER NOT NULL CHECK(reliabilityScore >= 1 AND reliabilityScore <= 5),
+    initiativeScore INTEGER NOT NULL CHECK(initiativeScore >= 1 AND initiativeScore <= 5),
+    submittedAt INTEGER NOT NULL,
+    CHECK(reviewerId != revieweeId),
+    UNIQUE(cycleId, reviewerId, revieweeId)
+);
+CREATE INDEX IF NOT EXISTS idx_founder_reviews_cycle ON founder_reviews(cycleId);
+CREATE INDEX IF NOT EXISTS idx_founder_reviews_reviewee ON founder_reviews(revieweeId);
+
+-- Accountability Warnings
+CREATE TABLE IF NOT EXISTS accountability_warnings (
+    id TEXT PRIMARY KEY,
+    founderId TEXT NOT NULL REFERENCES users(id),
+    cycleId TEXT NOT NULL REFERENCES review_cycles(id),
+    issuedAt INTEGER NOT NULL,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(founderId, cycleId)
+);
+CREATE INDEX IF NOT EXISTS idx_warnings_founder ON accountability_warnings(founderId);
+
+-- Equity Stakes
+CREATE TABLE IF NOT EXISTS equity_stakes (
+    id TEXT PRIMARY KEY,
+    founderId TEXT NOT NULL REFERENCES users(id),
+    initialStakePct REAL NOT NULL CHECK(initialStakePct >= 0),
+    currentStakePct REAL NOT NULL CHECK(currentStakePct >= 0),
+    vestingStartDate INTEGER NOT NULL,
+    cliffDate INTEGER NOT NULL,
+    vestingEndDate INTEGER NOT NULL,
+    vestingScheduleMonths INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    CHECK(vestingStartDate < cliffDate),
+    CHECK(cliffDate < vestingEndDate),
+    UNIQUE(founderId)
+);
+
+-- Dilution Events
+CREATE TABLE IF NOT EXISTS dilution_events (
+    id TEXT PRIMARY KEY,
+    founderId TEXT NOT NULL REFERENCES users(id),
+    cycleId TEXT NOT NULL REFERENCES review_cycles(id),
+    dilutionPct REAL NOT NULL CHECK(dilutionPct > 0),
+    previousStakePct REAL NOT NULL,
+    newStakePct REAL NOT NULL,
+    redistributionDetails TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dilution_founder ON dilution_events(founderId);
+
+-- Decisions
+CREATE TABLE IF NOT EXISTS decisions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    resolvedAt INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_resolved ON decisions(resolvedAt);
+
+-- Startup Health Config (local-only, never synced)
+CREATE TABLE IF NOT EXISTS startup_health_config (
+    id TEXT PRIMARY KEY,
+    cashBalance REAL NOT NULL DEFAULT 0,
+    monthlyExpenses TEXT NOT NULL DEFAULT '[]',
+    plannedMonthlyBudget REAL NOT NULL DEFAULT 0,
+    updatedAt INTEGER NOT NULL
+);
 "#;
 
 /// Tauri command: initializes the database schema on app launch.
@@ -343,11 +401,14 @@ mod tests {
             .collect();
 
         let expected = vec![
-            "breaks", "daily_reports", "focus_score_history", "git_events",
-            "idle_events", "leave_requests", "meetings", "milestone_tasks",
-            "milestones", "mood_checks", "morning_digests", "projects",
-            "public_holidays", "session_tasks", "sessions", "settings",
-            "standup_responses", "sync_dead_letter", "sync_queue", "tasks",
+            "accountability_warnings", "breaks", "daily_reports", "decisions",
+            "dilution_events", "equity_stakes", "focus_score_history",
+            "founder_reviews", "git_events",
+            "idle_events", "leave_requests", "milestone_tasks",
+            "milestones", "projects",
+            "public_holidays", "review_cycles", "session_tasks", "sessions",
+            "settings", "startup_health_config",
+            "sync_dead_letter", "sync_queue", "tasks",
             "team_members", "teams", "users", "weekly_reviews",
         ];
         assert_eq!(tables, expected);
@@ -368,20 +429,23 @@ mod tests {
             "idx_breaks_session",
             "idx_daily_reports_date",
             "idx_daily_reports_user",
+            "idx_decisions_resolved",
+            "idx_dilution_founder",
+            "idx_founder_reviews_cycle",
+            "idx_founder_reviews_reviewee",
             "idx_git_events_session",
             "idx_leave_requests_requester",
             "idx_leave_requests_status",
-            "idx_meetings_session",
             "idx_milestones_deadline",
             "idx_milestones_project",
-            "idx_mood_checks_user",
             "idx_public_holidays_year",
+            "idx_review_cycles_status",
             "idx_session_tasks_session",
             "idx_sessions_user_start",
-            "idx_standup_date",
             "idx_tasks_project",
             "idx_team_members_user",
             "idx_teams_invite_code",
+            "idx_warnings_founder",
         ];
         assert_eq!(indexes, expected);
     }
@@ -651,12 +715,16 @@ mod tests {
             ("public_holidays", 5),
             ("milestones", 7),
             ("milestone_tasks", 2),
-            ("standup_responses", 5),
-            ("mood_checks", 6),
-            ("meetings", 6),
             ("daily_reports", 6),
-            ("morning_digests", 5),
             ("focus_score_history", 5),
+            // v3 Governance tables
+            ("review_cycles", 7),
+            ("founder_reviews", 8),
+            ("accountability_warnings", 5),
+            ("equity_stakes", 9),
+            ("dilution_events", 8),
+            ("decisions", 5),
+            ("startup_health_config", 5),
         ];
 
         for (table, expected_count) in expected_columns {

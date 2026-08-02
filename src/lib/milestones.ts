@@ -108,8 +108,8 @@ export interface MilestoneWarning {
  */
 export function getMilestoneWarnings(
   milestones: Milestone[],
-  milestoneTasks: MilestoneTask[],
-  tasks: Task[],
+  _milestoneTasks: MilestoneTask[],
+  _tasks: Task[],
   now: number,
 ): MilestoneWarning[] {
   const THREE_DAYS_SECONDS = 3 * 86400;

@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useAuthStore } from "@/stores/authStore";
+import { isDevAuthEnabled, useAuthStore } from "@/stores/authStore";
 import { getUserTeam } from "@/lib/db";
 
 type GuardState = "loading" | "authenticated" | "unauthenticated" | "needs-onboarding";
@@ -28,6 +28,13 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
     if (!isAuthenticated || !user) {
       setGuardState("unauthenticated");
+      return;
+    }
+
+    // Dev auth is intentionally offline so local UI smoke tests do not probe
+    // a developer's PocketBase instance just to render the authenticated shell.
+    if (isDevAuthEnabled()) {
+      setGuardState("authenticated");
       return;
     }
 

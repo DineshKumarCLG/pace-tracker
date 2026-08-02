@@ -18,7 +18,7 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
       ref={ref}
       className={cn(
         cardVariants({ variant }),
-        "transition-all duration-200",
+        "transition-[border-color,box-shadow,transform] duration-200 ease-out",
         interactive && "hover:-translate-y-0.5 active:translate-y-0 cursor-pointer",
         glow && "hover:shadow-[0_0_24px_rgba(200,160,40,0.06)]",
         className,

@@ -7,10 +7,8 @@
 
 import { useEffect, useState } from "react";
 import {
-  Activity,
   Users,
   Zap,
-  TrendingUp,
   Settings,
   Plus,
   Check,

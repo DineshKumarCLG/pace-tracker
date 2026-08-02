@@ -93,8 +93,6 @@ pub fn setup_power_monitor(
 fn setup_platform_monitor(
     app_handle: AppHandle,
 ) -> Option<(JoinHandle<()>, Arc<AtomicBool>)> {
-    use std::process::Command;
-
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = Arc::clone(&stop);
 
@@ -103,8 +101,6 @@ fn setup_platform_monitor(
     // the current state to the previous state each poll cycle.
     let handle = thread::spawn(move || {
         let mut was_locked = false;
-        let poll_interval = Duration::from_secs(5);
-
         while !stop_clone.load(Ordering::Relaxed) {
             // Sleep in small increments for responsive shutdown
             for _ in 0..50 {

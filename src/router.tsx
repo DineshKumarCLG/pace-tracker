@@ -4,6 +4,8 @@ import {
   createRoute,
   Outlet,
 } from "@tanstack/react-router";
+import { Menu, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import AuthGuard from "@/components/AuthGuard";
 import TodayScreen from "@/screens/Today";
@@ -34,24 +36,81 @@ const rootRoute = createRootRoute({
 const appLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "app-layout",
-  component: () => (
-    <AuthGuard>
-      <div className="relative flex h-screen overflow-hidden bg-background text-foreground">
-        {/* Subtle ambient gradient for glass depth */}
+  component: () => {
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
+    const mobileNavButtonRef = useRef<HTMLButtonElement>(null);
+
+    useEffect(() => {
+      if (!mobileNavOpen) return;
+
+      const handleEscape = (event: KeyboardEvent) => {
+        if (event.key !== "Escape") return;
+        setMobileNavOpen(false);
+        mobileNavButtonRef.current?.focus();
+      };
+
+      document.addEventListener("keydown", handleEscape);
+      return () => document.removeEventListener("keydown", handleEscape);
+    }, [mobileNavOpen]);
+
+    const closeMobileNav = () => {
+      setMobileNavOpen(false);
+      mobileNavButtonRef.current?.focus();
+    };
+
+    return (
+      <AuthGuard>
+        <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground md:flex-row">
+        {/* Single amber accent keeps the dashboard calm and legible. */}
         <div className="pointer-events-none fixed inset-0 z-0">
           <div className="absolute top-0 right-0 h-[500px] w-[500px] rounded-full bg-primary/[0.03] blur-[120px]" />
-          <div className="absolute bottom-0 left-1/4 h-[400px] w-[400px] rounded-full bg-indigo-500/[0.02] blur-[100px]" />
         </div>
         {/* Sidebar — hidden on small screens, visible on md+ */}
         <div className="hidden md:flex relative z-10">
           <Sidebar />
         </div>
-        <main className="relative z-10 flex-1 overflow-hidden">
+        {/* Mobile navigation — replaces the desktop sidebar below the md breakpoint. */}
+        <div className="relative z-30 flex h-14 shrink-0 items-center border-b border-sidebar-border bg-sidebar px-4 md:hidden">
+          <button
+            type="button"
+            ref={mobileNavButtonRef}
+            aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={mobileNavOpen}
+            aria-controls="mobile-navigation"
+            onClick={() => setMobileNavOpen((open) => !open)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {mobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+          <div className="ml-3 flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-xs font-black text-primary-foreground">P</div>
+            <span className="text-sm font-bold tracking-tight">PACE</span>
+          </div>
+        </div>
+        {mobileNavOpen && (
+          <div
+            id="mobile-navigation"
+            className="mobile-nav-scrim fixed inset-0 z-40 bg-black/50 md:hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation"
+            onClick={closeMobileNav}
+          >
+            <div
+              className="mobile-nav-panel h-full w-[220px] shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Sidebar onNavigate={closeMobileNav} />
+            </div>
+          </div>
+        )}
+        <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
           <Outlet />
         </main>
-      </div>
-    </AuthGuard>
-  ),
+        </div>
+      </AuthGuard>
+    );
+  },
 });
 
 /* ── App routes (sidebar visible) ── */

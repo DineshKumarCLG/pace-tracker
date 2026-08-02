@@ -196,6 +196,40 @@ Property tests validate invariants that must hold for all inputs:
 | Leave balance computation | Balances never go negative |
 | Sync queue durability | Offline writes preserved and ordered |
 
+### Verification & shipping loop
+
+The repository includes a repeatable code-to-runtime-to-visual debug loop in
+[`SHIP_DEBUG_LOOP.md`](SHIP_DEBUG_LOOP.md). Run the checks below before shipping
+frontend or native changes:
+
+```bash
+# Type-check and build the production frontend
+npm run build
+
+# Run unit, integration, and property-based tests
+npm test
+
+# Run the authenticated desktop-shell smoke test at desktop and mobile widths
+npm run test:e2e
+
+# Validate the Rust/Tauri command layer
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Produce the platform installer/bundle
+npm run tauri build
+```
+
+The Playwright smoke test uses `VITE_DEV_AUTH=true` only inside its local test
+server so the shell can be exercised without PocketBase credentials. This
+switch is not a production authentication path. The browser pass covers route
+navigation, responsive navigation, keyboard dismissal, focus return, and
+browser console errors; the Rust check and Tauri build cover the native release
+path.
+
+For a focused loop while debugging, run `npm run dev`, reproduce the issue in
+the app, add or update the smallest regression test, then rerun the full suite
+above. Do not ship with a failing check or an unresolved console/native error.
+
 ---
 
 ## Environment Variables

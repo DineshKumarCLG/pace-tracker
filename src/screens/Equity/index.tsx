@@ -8,12 +8,10 @@ import { useEffect, useState, useMemo } from "react";
 import {
   PieChart,
   TrendingDown,
-  Clock,
   DollarSign,
   Percent,
   ShieldCheck,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";

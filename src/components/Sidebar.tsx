@@ -54,7 +54,7 @@ const bottomNavItems: NavItem[] = [
   { type: "item", to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const routerState = useRouterState();
   const router = useRouter();
   const currentPath = routerState.location.pathname;
@@ -114,6 +114,7 @@ export default function Sidebar() {
             <Link
               key={to}
               to={to}
+              onClick={onNavigate}
               onMouseEnter={() => setHovered(to)}
               onMouseLeave={() => setHovered(null)}
               className={cn(

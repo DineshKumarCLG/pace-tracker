@@ -32,6 +32,7 @@ let mockAuthState = {
 };
 
 vi.mock("@/stores/authStore", () => ({
+  isDevAuthEnabled: () => false,
   useAuthStore: (selector?: (s: typeof mockAuthState) => unknown) => {
     if (typeof selector === "function") return selector(mockAuthState);
     return mockAuthState;

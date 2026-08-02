@@ -31,7 +31,6 @@ const DARK_TEXT = [30, 30, 46] as const;
 const MUTED_TEXT = [120, 120, 140] as const;
 const PAGE_MARGIN = 20;
 const PAGE_WIDTH = 210; // A4 width in mm
-const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 
 /* ── Helpers ── */
 

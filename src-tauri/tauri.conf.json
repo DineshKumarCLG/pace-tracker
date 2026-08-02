@@ -22,7 +22,7 @@
       "csp": null
     },
     "trayIcon": {
-      "iconPath": "icons/icon.ico",
+      "iconPath": "icons/icon.png",
       "iconAsTemplate": true
     }
   },
@@ -30,6 +30,7 @@
     "active": true,
     "targets": "all",
     "icon": [
+      "icons/icon.png",
       "icons/icon.ico"
     ]
   }

@@ -424,9 +424,15 @@ import { vi, beforeEach, afterEach } from "vitest";
 describe("createLeaveRequest", () => {
   const userId = "user-1";
 
-  // Future dates (well into the future to avoid "past date" rejection)
-  const futureMonStart = utc(2026, 6, 1); // Mon Jun 1 2026
-  const futureFriEnd = utc(2026, 6, 5); // Fri Jun 5 2026
+  // Keep submission fixtures relative to the clock so the suite does not expire.
+  const futureYear = new Date().getUTCFullYear() + 1;
+  const futureBalanceStart = (() => {
+    const date = new Date(Date.UTC(futureYear, 0, 4));
+    while (date.getUTCDay() !== 1) date.setUTCDate(date.getUTCDate() + 1);
+    return Math.floor(date.getTime() / 1000);
+  })();
+  const futureMonStart = futureBalanceStart + 147 * 86400;
+  const futureFriEnd = futureMonStart + 4 * 86400;
 
   beforeEach(() => {
     // Mock PocketBase create to return a record with an id
@@ -512,29 +518,29 @@ describe("createLeaveRequest", () => {
         requesterId: userId,
         type: "annual",
         status: "approved",
-        startDate: utc(2026, 1, 5),
-        endDate: utc(2026, 1, 9), // 5 days
+        startDate: futureBalanceStart,
+        endDate: futureBalanceStart + 4 * 86400, // 5 days
       }),
       makeRequest({
         requesterId: userId,
         type: "annual",
         status: "approved",
-        startDate: utc(2026, 1, 12),
-        endDate: utc(2026, 1, 16), // 5 days
+        startDate: futureBalanceStart + 7 * 86400,
+        endDate: futureBalanceStart + 11 * 86400, // 5 days
       }),
       makeRequest({
         requesterId: userId,
         type: "annual",
         status: "approved",
-        startDate: utc(2026, 1, 19),
-        endDate: utc(2026, 1, 23), // 5 days
+        startDate: futureBalanceStart + 14 * 86400,
+        endDate: futureBalanceStart + 18 * 86400, // 5 days
       }),
       makeRequest({
         requesterId: userId,
         type: "annual",
         status: "approved",
-        startDate: utc(2026, 1, 26),
-        endDate: utc(2026, 1, 28), // 3 days
+        startDate: futureBalanceStart + 21 * 86400,
+        endDate: futureBalanceStart + 23 * 86400, // 3 days
       }),
     ];
     // 18 used, 2 remaining — requesting 5 should fail
@@ -604,8 +610,8 @@ describe("createLeaveRequest", () => {
         requesterId: userId,
         type: "sick",
         status: "approved",
-        startDate: utc(2026, 2, 2),
-        endDate: utc(2026, 2, 13), // 10 business days — full sick allocation
+        startDate: futureBalanceStart + 28 * 86400,
+        endDate: futureBalanceStart + 40 * 86400, // 10 business days — full sick allocation
       }),
     ];
     // Should succeed even though sick balance is exhausted

@@ -66,7 +66,7 @@ export default function IdleModal() {
     return () => { unlisten?.(); };
   }, [setIdleInfo, setIdleModalVisible]);
 
-  function handleResolve(resolution: IdleResolution) {
+  function handleResolve(_resolution: IdleResolution) {
     // For now, dismiss the modal and resume the timer.
     // Actual break record creation and idle_event update will be wired in task 7.6.
     setPaused(false);

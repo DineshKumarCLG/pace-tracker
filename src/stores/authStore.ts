@@ -35,7 +35,7 @@ function mapRecordToUser(record: Record<string, unknown>): AuthUser {
 
 /* ── Dev mode test user (no PocketBase needed) ── */
 
-function isDevAuth(): boolean {
+export function isDevAuthEnabled(): boolean {
   try { return import.meta.env.VITE_DEV_AUTH === "true"; } catch { return false; }
 }
 
@@ -53,7 +53,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set) => ({
   isLoading: true,
 
   login: async (email: string, password: string) => {
-    if (isDevAuth()) {
+    if (isDevAuthEnabled()) {
       set({ user: DEV_USER, isAuthenticated: true });
       return;
     }
@@ -66,7 +66,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set) => ({
   },
 
   signup: async (name: string, email: string, password: string) => {
-    if (isDevAuth()) {
+    if (isDevAuthEnabled()) {
       set({ user: { ...DEV_USER, name, email }, isAuthenticated: true });
       return;
     }
@@ -86,7 +86,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set) => ({
   },
 
   logout: () => {
-    if (isDevAuth()) {
+    if (isDevAuthEnabled()) {
       set({ user: null, isAuthenticated: false });
       return;
     }
@@ -96,7 +96,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set) => ({
   },
 
   checkAuth: () => {
-    if (isDevAuth()) {
+    if (isDevAuthEnabled()) {
       set({ user: DEV_USER, isAuthenticated: true, isLoading: false });
       return;
     }

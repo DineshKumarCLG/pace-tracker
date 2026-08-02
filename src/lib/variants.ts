@@ -17,7 +17,7 @@ import { cn } from "./utils";
 export type ButtonVariant = "primary" | "secondary" | "tertiary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg";
 
-const buttonBase = "inline-flex items-center justify-center gap-2 font-semibold rounded-lg transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-50 disabled:pointer-events-none select-none";
+const buttonBase = "inline-flex items-center justify-center gap-2 font-semibold rounded-lg transition-[background-color,border-color,color,box-shadow,opacity,transform] duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-50 disabled:pointer-events-none select-none";
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
   primary: "btn-3d text-[hsl(30,20%,8%)]",

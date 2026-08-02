@@ -9,7 +9,6 @@
 
 import {
   FileText,
-  Clock,
   CheckCircle2,
   Coffee,
   GitCommit,

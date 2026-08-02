@@ -992,7 +992,7 @@ fn get_device_wake_time_inner() -> i64 {
     now - 3600
 }
 
-fn platform_wake_time(now: i64) -> Option<i64> {
+fn platform_wake_time(_now: i64) -> Option<i64> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
@@ -1016,7 +1016,7 @@ fn platform_wake_time(now: i64) -> Option<i64> {
         if let Ok(contents) = std::fs::read_to_string("/proc/uptime") {
             if let Some(uptime_str) = contents.split_whitespace().next() {
                 if let Ok(uptime_secs) = uptime_str.parse::<f64>() {
-                    return Some(now - uptime_secs as i64);
+                    return Some(_now - uptime_secs as i64);
                 }
             }
         }

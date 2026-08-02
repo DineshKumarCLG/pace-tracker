@@ -87,9 +87,11 @@ function buildTestRouter(initialPath = "/") {
 async function renderAtRoute(path: string) {
   const router = buildTestRouter(path);
   const result = render(<RouterProvider router={router} />);
-  // Wait for the router to settle
+  // Component effects can keep the router in a transient pending state while
+  // the route is already rendered. Wait for the requested location instead;
+  // each caller then asserts on the visible screen content.
   await waitFor(() => {
-    expect(router.state.status).toBe("idle");
+    expect(router.state.location.pathname).toBe(path);
   });
   return result;
 }

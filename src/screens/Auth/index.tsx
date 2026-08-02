@@ -9,7 +9,13 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { useAuthStore } from "@/stores/authStore";
-import { pb } from "@/lib/pocketbase";
+import {
+  checkPocketBaseHealth,
+  getPocketBaseUrl,
+  normalizePocketBaseUrl,
+  pb,
+  setPocketBaseUrl,
+} from "@/lib/pocketbase";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 
@@ -44,6 +50,11 @@ export default function AuthScreen() {
   /* Forgot password */
   const [forgotSent, setForgotSent] = useState(false);
 
+  /* Server connection — available before authentication so packaged builds work. */
+  const [serverUrl, setServerUrl] = useState(() => getPocketBaseUrl());
+  const [serverState, setServerState] = useState<"idle" | "checking" | "online" | "offline">("idle");
+  const [serverMessage, setServerMessage] = useState("");
+
   function clearErrors() {
     setErrors({});
   }
@@ -52,6 +63,23 @@ export default function AuthScreen() {
     setTab(next);
     clearErrors();
     setForgotSent(false);
+  }
+
+  async function handleCheckServer() {
+    setServerState("checking");
+    setServerMessage("");
+    try {
+      const normalized = normalizePocketBaseUrl(serverUrl);
+      setPocketBaseUrl(normalized);
+      try { localStorage.setItem("pace_pb_url", normalized); } catch { /* storage unavailable */ }
+      setServerUrl(normalized);
+      await checkPocketBaseHealth();
+      setServerState("online");
+      setServerMessage("Server is reachable.");
+    } catch (error) {
+      setServerState("offline");
+      setServerMessage(error instanceof Error ? error.message : "Could not reach the server.");
+    }
   }
 
   /* ── Validation ── */
@@ -197,6 +225,41 @@ export default function AuthScreen() {
           >
             Log In
           </button>
+        </div>
+
+        <div className="mb-5 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[12px] font-medium text-foreground">Sync server</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">Set this once for the desktop app.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCheckServer}
+              disabled={loading || serverState === "checking"}
+              className="shrink-0 text-[11px] font-medium text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+            >
+              {serverState === "checking" ? "Checking…" : "Check connection"}
+            </button>
+          </div>
+          <Input
+            className="mt-2"
+            aria-label="PocketBase server URL"
+            value={serverUrl}
+            onChange={(e) => {
+              setServerUrl(e.target.value);
+              setServerState("idle");
+              setServerMessage("");
+            }}
+            placeholder="https://pace.example.com"
+            autoComplete="url"
+            disabled={loading || serverState === "checking"}
+          />
+          {serverMessage && (
+            <p className={`mt-1.5 text-[10px] ${serverState === "online" ? "text-emerald-400" : "text-destructive"}`}>
+              {serverMessage}
+            </p>
+          )}
         </div>
 
         {/* General error */}
@@ -349,17 +412,30 @@ function FieldGroup({
 /* ── Error parser ── */
 
 function parseError(err: unknown, context: "signup" | "login"): string {
-  const message =
-    err instanceof Error ? err.message : typeof err === "object" && err !== null ? JSON.stringify(err) : String(err);
+  const response = typeof err === "object" && err !== null && "response" in err
+    ? (err as { response?: { data?: Record<string, { message?: string; code?: string }> } }).response
+    : undefined;
+  const message = err instanceof Error ? err.message : String(err);
+  const fieldMessages = Object.values(response?.data ?? {})
+    .map((field) => field?.message ?? "")
+    .filter(Boolean)
+    .join(" ");
 
-  const lower = message.toLowerCase();
+  const lower = `${message} ${fieldMessages}`.toLowerCase();
+
+  if (lower.includes("failed to fetch") || lower.includes("network") || lower.includes("econnrefused") || lower.includes("could not be reached")) {
+    return `Cannot reach ${getPocketBaseUrl()}. Check the Sync server URL and make sure PocketBase is running.`;
+  }
 
   if (context === "signup") {
     if (lower.includes("already") || lower.includes("unique") || lower.includes("exists")) {
       return "An account with this email already exists. Try logging in.";
     }
-    if (lower.includes("password") && (lower.includes("short") || lower.includes("min"))) {
+    if (lower.includes("password") && (lower.includes("short") || lower.includes("min") || lower.includes("length"))) {
       return "Password is too short. Use at least 8 characters.";
+    }
+    if (lower.includes("email") && (lower.includes("invalid") || lower.includes("valid"))) {
+      return "Enter a valid email address.";
     }
   }
 

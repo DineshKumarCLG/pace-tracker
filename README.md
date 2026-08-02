@@ -162,6 +162,21 @@ This starts:
 - **LiteLLM** on port `4000` — AI proxy for multiple LLM providers
 - **Caddy** on ports `80`/`443` — reverse proxy with automatic HTTPS
 
+### Desktop authentication
+
+The desktop client needs a reachable PocketBase server for real account creation
+and sign-in. For a local setup, start the services above. For a deployed server,
+bundle its public URL into the app when building:
+
+```bash
+VITE_POCKETBASE_URL=https://pace.example.com npm run tauri build
+```
+
+The auth screen also includes a **Sync server** field and a connection check so
+an already-installed DMG can be pointed at a different PocketBase host. The
+chosen URL is stored locally on that device. `VITE_DEV_AUTH=true` is reserved
+for local smoke tests and must not be used for production builds.
+
 ---
 
 ## Testing
@@ -236,6 +251,7 @@ above. Do not ship with a failing check or an unresolved console/native error.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `VITE_POCKETBASE_URL` | Recommended | PocketBase URL bundled into the desktop/web client; use HTTPS in production |
 | `PB_ADMIN_EMAIL` | Yes | PocketBase admin email |
 | `PB_ADMIN_PASSWORD` | Yes | PocketBase admin password |
 | `LITELLM_MASTER_KEY` | Yes | LiteLLM API key |
